@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hello-world 프로젝트 허브</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36;
+    --text: #d7dce4; --muted: #8b93a1; --accent: #6ea8fe;
+    --green: #3fb950; --red: #f85149; --blue: #58a6ff; --yellow: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', 'Malgun Gothic', sans-serif; line-height: 1.6; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+  header h1 { font-size: 1.5rem; }
+  header p { color: var(--muted); font-size: .9rem; margin-top: 4px; }
+  .stats { display: flex; gap: 12px; margin: 20px 0; flex-wrap: wrap; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 18px; }
+  .stat b { font-size: 1.3rem; display: block; }
+  .stat span { color: var(--muted); font-size: .8rem; }
+  h2 { font-size: 1.1rem; margin: 28px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filters button { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 20px; padding: 4px 14px; cursor: pointer; font-size: .85rem; }
+  .filters button.on { border-color: var(--accent); color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+  td.nowrap { white-space: nowrap; }
+  .badge { border-radius: 12px; padding: 1px 10px; font-size: .8rem; white-space: nowrap; }
+  .b-done { background: rgba(63,185,80,.15); color: var(--green); }
+  .b-drop { background: rgba(248,81,73,.15); color: var(--red); }
+  .b-run  { background: rgba(88,166,255,.15); color: var(--blue); }
+  .b-etc  { background: rgba(210,153,34,.15); color: var(--yellow); }
+  .docs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .docs button { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: .85rem; }
+  .docs button:hover { border-color: var(--accent); }
+  #viewer { display: none; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 24px 28px; margin-top: 14px; }
+  #viewer h1, #viewer h2, #viewer h3 { margin: 14px 0 8px; border: none; padding: 0; }
+  #viewer pre { background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: .85rem; }
+  #viewer code { background: #0d1117; border-radius: 4px; padding: 1px 5px; font-size: .85em; }
+  #viewer pre code { border: none; padding: 0; }
+  #viewer table { margin: 10px 0; }
+  #viewer blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--muted); margin: 8px 0; }
+  #viewer a { color: var(--accent); }
+  #viewer ul, #viewer ol { padding-left: 24px; }
+  .err { color: var(--red); background: rgba(248,81,73,.1); border-radius: 8px; padding: 12px 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🚀 Hello-world 프로젝트 허브</h1>
+    <p>로컬 전용 대시보드 · 데이터 원본: <code>docs/WORKLOG.md</code></p>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <h2>📋 작업 로그</h2>
+  <div class="filters" id="filters"></div>
+  <div id="worklog"></div>
+
+  <h2>📄 기술 문서</h2>
+  <div class="docs" id="docs"></div>
+  <div id="viewer"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let rows = [], filter = '전체';
+
+function badge(status) {
+  const cls = status.includes('완료') ? 'b-done' : status.includes('파기') ? 'b-drop'
+            : status.includes('진행') ? 'b-run' : 'b-etc';
+  return `<span class="badge ${cls}">${esc(status)}</span>`;
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+function parseWorklog(md) {
+  const lines = md.split('\n').filter(l => l.trim().startsWith('|'));
+  if (lines.length < 3) return [];
+  return lines.slice(2).map(l => l.split('|').slice(1, -1).map(c => c.trim()))
+              .filter(c => c.length >= 6);
+}
+
+function renderWorklog() {
+  const shown = rows.filter(r => filter === '전체' || r[3].includes(filter));
+  if (!shown.length) { $('worklog').innerHTML = '<p class="err">표시할 항목이 없습니다.</p>'; return; }
+  $('worklog').innerHTML = `<table><tr><th>날짜</th><th>작업명</th><th>트랙</th><th>상태</th><th>요약</th><th>커밋</th></tr>` +
+    shown.map(r => `<tr><td class="nowrap">${esc(r[0])}</td><td><b>${esc(r[1])}</b></td><td class="nowrap">${esc(r[2])}</td><td>${badge(r[3])}</td><td>${inline(r[4])}</td><td class="nowrap">${inline(r[5])}</td></tr>`).join('') +
+    `</table>`;
+}
+
+function renderStats() {
+  const n = k => rows.filter(r => r[3].includes(k)).length;
+  $('stats').innerHTML = [
+    ['총 작업', rows.length], ['완료', n('완료')], ['파기', n('파기')], ['진행중', n('진행')]
+  ].map(([l, v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
+}
+
+function renderFilters() {
+  const opts = ['전체', '완료', '파기', '진행'];
+  $('filters').innerHTML = opts.map(o =>
+    `<button class="${o === filter ? 'on' : ''}" onclick="filter='${o}';renderFilters();renderWorklog()">${o}</button>`).join('');
+}
+
+// 경량 마크다운 렌더러 (문서 뷰어용)
+function renderMd(md) {
+  const out = []; let inCode = false, buf = [];
+  const flushTable = tbl => {
+    if (!tbl.length) return;
+    out.push('<table>' + tbl.filter((l, i) => i !== 1).map((l, i) =>
+      '<tr>' + l.split('|').slice(1, -1).map(c => `<${i ? 'td' : 'th'}>${inline(c.trim())}</${i ? 'td' : 'th'}>`).join('') + '</tr>').join('') + '</table>');
+    tbl.length = 0;
+  };
+  const tbl = [];
+  for (const line of md.split('\n')) {
+    if (line.trim().startsWith('```')) {
+      if (inCode) { out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`); buf = []; }
+      inCode = !inCode; continue;
+    }
+    if (inCode) { buf.push(line); continue; }
+    if (line.trim().startsWith('|')) { tbl.push(line); continue; }
+    flushTable(tbl);
+    const h = line.match(/^(#{1,4})\s+(.*)/);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
+    if (/^\s*---+\s*$/.test(line)) { out.push('<hr>'); continue; }
+    if (/^\s*>\s?/.test(line)) { out.push(`<blockquote>${inline(line.replace(/^\s*>\s?/, ''))}</blockquote>`); continue; }
+    if (/^\s*[-*]\s+/.test(line)) { out.push(`<ul><li>${inline(line.replace(/^\s*[-*]\s+/, ''))}</li></ul>`); continue; }
+    if (/^\s*\d+\.\s+/.test(line)) { out.push(`<ol><li>${inline(line.replace(/^\s*\d+\.\s+/, ''))}</li></ol>`); continue; }
+    if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  flushTable(tbl);
+  // 연속된 li 묶음 정리
+  return out.join('\n').replace(/<\/ul>\n<ul>/g, '').replace(/<\/ol>\n<ol>/g, '');
+}
+
+async function openDoc(name) {
+  const res = await fetch(`/docs/${name}`);
+  $('viewer').style.display = 'block';
+  $('viewer').innerHTML = res.ok ? renderMd(await res.text()) : `<p class="err">${name} 로드 실패</p>`;
+  $('viewer').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function loadDocs() {
+  try {
+    const html = await (await fetch('/docs/')).text();
+    const names = [...html.matchAll(/href="([^"]+\.md)"/g)].map(m => decodeURIComponent(m[1]));
+    $('docs').innerHTML = names.map(n => `<button onclick="openDoc('${n}')">📄 ${n}</button>`).join('')
+      || '<p class="err">문서 없음</p>';
+  } catch { $('docs').innerHTML = '<p class="err">docs/ 목록을 불러올 수 없습니다.</p>'; }
+}
+
+async function init() {
+  try {
+    const md = await (await fetch('/docs/WORKLOG.md')).text();
+    rows = parseWorklog(md).reverse(); // 최신이 위로
+    renderStats(); renderFilters(); renderWorklog();
+  } catch {
+    $('worklog').innerHTML = '<p class="err">WORKLOG.md를 불러올 수 없습니다. 서버를 레포 루트에서 실행했는지 확인하세요 (hub/serve.cmd 사용 권장).</p>';
+  }
+  loadDocs();
+}
+init();
+</script>
+</body>
+</html>
