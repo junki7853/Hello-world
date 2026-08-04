@@ -24,7 +24,8 @@ AI 엔지니어링 포트폴리오이자 개인 개발 허브입니다.
 projects/      완성도를 갖춘 프로젝트 (포트폴리오 대상)
 experiments/   빠른 프로토타입, POC, 학습용 실험
 templates/     재사용 가능한 보일러플레이트 (회사 이관용 기반)
-docs/          학습 노트, 설계 문서, 회고
+docs/          학습 노트, 설계 문서, 회고, 작업 로그(WORKLOG.md)
+hub/           로컬 전용 프로젝트 대시보드 (hub/serve.cmd 실행 → localhost:8787/hub/)
 ```
 
 ## 운영 방식
