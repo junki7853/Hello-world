@@ -26,7 +26,7 @@
 사용자가 "~를 만들 거야"라고 하면 별도 지시 없이도 아래 6단계를 순서대로 진행한다:
 
 1. **개발 계획 수립** — `plan` 스킬로 계획 수립 (대형 기능·정밀 코드베이스 분석이 필요하면 `prp-plan`), 사용자 승인 후 Orca 워크트리 생성
-2. **개발 진행** — 관련 개발 스킬을 적극 활용: coding-standards(공통) · python-patterns/python-testing(Python) · backend-patterns/api-design(서버·API) · frontend-patterns(웹 UI) · mcp-server-patterns(MCP) · git-workflow(브랜치·커밋)
+2. **개발 진행** — 워크트리에 **워커 에이전트를 배정**해 수행하고 코디네이터는 감독·보고 수신만 한다 (단일 작업도 워커가 수행. 코디네이터 직접 개발은 경량 트랙만). 관련 개발 스킬을 적극 활용: coding-standards(공통) · python-patterns/python-testing(Python) · backend-patterns/api-design(서버·API) · frontend-patterns(웹 UI) · mcp-server-patterns(MCP) · git-workflow(브랜치·커밋)
 3. **코드리뷰** — 정확성·버그·보안 중심 리뷰 (`/code-review`)
 4. **포니테일 리뷰** — `ponytail-review`로 과잉설계·군살 제거 리뷰, 지적사항 반영
 5. **스테이징 검증** — 테스트 전체 실행 + 실제 동작 확인 (개선/수정 트랙은 기존 기능 회귀 확인 포함). 배포 인프라가 생기면 스테이징 서버 검증으로 확장
@@ -34,7 +34,9 @@
 
 ## 멀티 에이전트 운용
 
-- **파일을 수정하는 병렬 개발**: Orca 오케스트레이션(워크트리 분리)이 기본 — run-create → task-create → worker-start → 코디네이터 감독
+- **실행 주체 원칙**: 개발(표준·개선 트랙)은 항상 워크트리+워커 에이전트가 실행한다. 코디네이터(메인 세션)는 계획·워커 배정·감독·리뷰·사용자 보고를 담당하며 직접 개발하지 않는다
+- **파일을 수정하는 개발**: Orca 오케스트레이션(워크트리 분리)이 기본 — run-create → task-create → worker-start → 코디네이터 감독
+- **사용자 중간 개입**: 사용자는 Orca 앱에서 워커 터미널에 직접 지시하거나 워크트리 파일을 직접 수정할 수 있다. 워커는 사용자의 직접 수정을 덮어쓰지 말고 이어받아 반영할 것. 코디네이터는 "N번 뭐해?"류 요청에 터미널을 읽어 요약 보고, "N번한테 전달해"류 요청에 해당 워커로 지시를 중계한다
 - **조사·리뷰·분석 등 읽기 병렬**: 코디네이터의 내장 서브에이전트(Agent 도구) 사용 — 파일 수정이 없어 워크트리 불필요, 더 가볍다
 - ECC의 멀티에이전트 하네스(dmux-workflows, claude-devfleet, autonomous-agent-harness 등)는 Orca와 역할이 중복되므로 도입하지 않는다
 - 병렬 분해는 파일이 겹치지 않는 독립 작업만. 겹치면 순차 진행
