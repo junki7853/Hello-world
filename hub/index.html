@@ -8,7 +8,7 @@
   :root {
     --bg: #0b0e14; --panel: #131722; --panel-2: #171c29; --border: #232a3a;
     --text: #e6e9f0; --muted: #8f99ad; --faint: #5c6578;
-    --accent: #6ea8fe; --accent-2: #a78bfa;
+    --accent: #6ea8fe;
     --grad: linear-gradient(120deg, #6ea8fe, #a78bfa);
     --green: #3fb950; --red: #f85149; --blue: #58a6ff; --yellow: #d29922;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.28);
@@ -135,7 +135,6 @@
   .b-drop { background: rgba(248,81,73,.14); color: var(--red); }
   .b-run  { background: rgba(88,166,255,.14); color: var(--blue); }
   .b-etc  { background: rgba(210,153,34,.14); color: var(--yellow); }
-  .empty { color: var(--faint); font-size: .88rem; padding: 18px 4px; }
 
   /* ── 미니 바차트 ────────────────────────── */
   #chart svg { width: 100%; height: auto; max-height: 170px; display: block; }
@@ -156,18 +155,16 @@
   }
   .docs button:hover { border-color: var(--accent); transform: translateX(2px); }
 
-  /* ── 문서 오버레이 ──────────────────────── */
-  #overlay { position: fixed; inset: 0; z-index: 50; }
-  #overlay[hidden] { display: none; }
-  .ov-backdrop { position: absolute; inset: 0; background: rgba(4,6,10,.66); backdrop-filter: blur(3px); }
-  .ov-panel {
-    position: absolute; inset: 4vh 0 4vh 50%; transform: translateX(-50%);
-    width: min(860px, 94vw); display: flex; flex-direction: column;
+  /* ── 문서 오버레이 (dialog) ─────────────── */
+  #overlay {
+    width: min(860px, 94vw); max-height: 92vh; padding: 0; margin: auto;
+    flex-direction: column; color: var(--text);
     background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
     box-shadow: 0 24px 80px rgba(0,0,0,.55); overflow: hidden;
-    animation: ov-in .18s ease-out;
   }
-  @keyframes ov-in { from { opacity: 0; transform: translateX(-50%) translateY(10px); } }
+  #overlay[open] { display: flex; animation: ov-in .18s ease-out; }
+  #overlay::backdrop { background: rgba(4,6,10,.66); backdrop-filter: blur(3px); }
+  @keyframes ov-in { from { opacity: 0; transform: translateY(10px); } }
   .ov-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none;
     padding: 14px 22px; border-bottom: 1px solid var(--border); background: var(--panel-2);
@@ -204,8 +201,6 @@
     .stats { grid-template-columns: repeat(2, 1fr); }
     .grid { grid-template-columns: 1fr; }
     .side { position: static; }
-    .ov-panel { inset: 3vh 3vw; transform: none; width: auto; }
-    @keyframes ov-in { from { opacity: 0; transform: translateY(10px); } }
   }
 </style>
 </head>
@@ -255,17 +250,14 @@
   </div>
 </div>
 
-<div id="overlay" hidden>
-  <div class="ov-backdrop" id="ov-backdrop"></div>
-  <div class="ov-panel" role="dialog" aria-modal="true" aria-labelledby="ov-title">
-    <div class="ov-head"><b id="ov-title"></b><button id="ov-close" aria-label="닫기">✕</button></div>
-    <div id="viewer"></div>
-  </div>
-</div>
+<dialog id="overlay" aria-labelledby="ov-title">
+  <div class="ov-head"><b id="ov-title"></b><button id="ov-close" aria-label="닫기">✕</button></div>
+  <div id="viewer"></div>
+</dialog>
 
 <script>
 const $ = id => document.getElementById(id);
-let rows = [], filter = '전체', query = '', loadFailed = false;
+let rows = [], filter = '전체', loadFailed = false;
 
 // ── XSS 가드 (불변 계약: 따옴표까지 이스케이프, 링크는 https/상대경로/#만 허용) ──
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -328,11 +320,11 @@ function renderFilters() {
 // ── 타임라인 (날짜 그룹핑 카드 뷰) ──
 function renderTimeline() {
   if (loadFailed) return; // 로드 실패 문구를 검색/필터가 덮어쓰지 않도록
-  const q = query.trim().toLowerCase();
+  const q = $('search').value.trim().toLowerCase();
   const shown = rows.filter(r =>
     (filter === '전체' || r[3].includes(filter)) &&
     (!q || r.join(' ').toLowerCase().includes(q)));
-  if (!shown.length) { $('timeline').innerHTML = '<p class="empty">조건에 맞는 작업이 없습니다.</p>'; return; }
+  if (!shown.length) { $('timeline').innerHTML = '<p class="muted">조건에 맞는 작업이 없습니다.</p>'; return; }
   const groups = [];
   for (const r of shown) {
     const g = groups[groups.length - 1];
@@ -362,8 +354,9 @@ function monthCounts() {
   const [sy, sm] = keys[0].split('-').map(Number);
   // 마지막 기록 이후의 공백도 보이도록 오늘 달까지 채운다 (미래 기록이 있으면 그쪽 우선)
   const now = new Date();
-  const [ey, em] = [keys[keys.length - 1], now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0')]
-    .sort().pop().split('-').map(Number);
+  const nowKey = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  const last = keys[keys.length - 1];
+  const [ey, em] = (last > nowKey ? last : nowKey).split('-').map(Number);
   const out = [];
   for (let y = sy, m = sm; y < ey || (y === ey && m <= em); m === 12 ? (y++, m = 1) : m++)
     out.push({ key: y + '-' + String(m).padStart(2, '0'), y, m, n: c.get(y + '-' + String(m).padStart(2, '0')) || 0 });
@@ -381,15 +374,15 @@ function renderChart() {
   const plotH = H - padT - padB, baseY = H - padB;
   const barW = Math.min(24, slotW - 10);
   let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 작업 수">`;
-  svg += `<line class="axis" x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"/>`;
   data.forEach((d, i) => {
     const x = offX + i * slotW + (slotW - barW) / 2;
     const cx = x + barW / 2;
     if (d.n) {
       const h = Math.max(4, Math.round(plotH * d.n / max));
       const y = baseY - h;
-      const r = Math.min(4, h, barW / 2); // 상단만 4px 라운드, 베이스라인은 직각
-      svg += `<path class="bar" d="M${x},${baseY} V${y + r} Q${x},${y} ${x + r},${y} H${x + barW - r} Q${x + barW},${y} ${x + barW},${y + r} V${baseY} Z"><title>${d.key} · ${d.n}건</title></path>`;
+      const r = Math.min(4, h, barW / 2);
+      // rx는 네 모서리를 모두 깎으므로 바를 baseY 아래로 1px 연장해 하단 라운드를 가림 (축 라인이 위를 덮음)
+      svg += `<rect class="bar" x="${x}" y="${y}" width="${barW}" height="${h + 1}" rx="${r}"><title>${d.key} · ${d.n}건</title></rect>`;
       svg += `<text class="val" x="${cx}" y="${y - 6}">${d.n}</text>`;
     } else {
       svg += `<rect class="stub" x="${x}" y="${baseY - 2}" width="${barW}" height="2"><title>${d.key} · 0건</title></rect>`;
@@ -397,6 +390,7 @@ function renderChart() {
     const lbl = (i === 0 || d.m === 1) ? `${String(d.y).slice(2)}.${d.m}` : `${d.m}월`;
     svg += `<text class="lbl" x="${cx}" y="${H - 6}">${lbl}</text>`;
   });
+  svg += `<line class="axis" x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"/>`;
   $('chart').innerHTML = svg + '</svg>';
 }
 
@@ -433,19 +427,14 @@ function renderMd(md) {
   return out.join('\n').replace(/<\/ul>\n<ul>/g, '').replace(/<\/ol>\n<ol>/g, '');
 }
 
-// ── 문서 오버레이 ──
+// ── 문서 오버레이 (dialog: Esc 닫기·백드롭 내장) ──
 async function openDoc(name) {
   const res = await fetch('/docs/' + encodeURIComponent(name));
   $('ov-title').textContent = name;
   $('viewer').innerHTML = res.ok ? renderMd(await res.text()) : `<p class="err">${esc(name)} 로드 실패</p>`;
-  $('overlay').hidden = false;
+  $('overlay').showModal();
   document.body.style.overflow = 'hidden';
   $('viewer').scrollTop = 0;
-}
-
-function closeDoc() {
-  $('overlay').hidden = true;
-  document.body.style.overflow = '';
 }
 
 async function loadDocs() {
@@ -468,10 +457,11 @@ async function loadDocs() {
 
 // ── 초기화 ──
 async function init() {
-  $('ov-close').addEventListener('click', closeDoc);
-  $('ov-backdrop').addEventListener('click', closeDoc);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('overlay').hidden) closeDoc(); });
-  $('search').addEventListener('input', e => { query = e.target.value; renderTimeline(); });
+  const ov = $('overlay');
+  $('ov-close').addEventListener('click', () => ov.close());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.close(); }); // 백드롭 클릭
+  ov.addEventListener('close', () => { if (!ov.open) document.body.style.overflow = ''; }); // close 이벤트는 비동기라 즉시 재열림과 경합 가능
+  $('search').addEventListener('input', renderTimeline);
   try {
     const res = await fetch('/docs/WORKLOG.md');
     if (!res.ok) throw new Error('WORKLOG fetch failed: ' + res.status);
