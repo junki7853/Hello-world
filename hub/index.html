@@ -138,7 +138,7 @@
   .empty { color: var(--faint); font-size: .88rem; padding: 18px 4px; }
 
   /* ── 미니 바차트 ────────────────────────── */
-  #chart svg { width: 100%; height: auto; display: block; }
+  #chart svg { width: 100%; height: auto; max-height: 170px; display: block; }
   #chart .bar { fill: var(--accent); opacity: .88; transition: opacity .15s; }
   #chart .bar:hover { opacity: 1; }
   #chart .stub { fill: var(--border); }
@@ -265,7 +265,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let rows = [], filter = '전체', query = '';
+let rows = [], filter = '전체', query = '', loadFailed = false;
 
 // ── XSS 가드 (불변 계약: 따옴표까지 이스케이프, 링크는 https/상대경로/#만 허용) ──
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -327,6 +327,7 @@ function renderFilters() {
 
 // ── 타임라인 (날짜 그룹핑 카드 뷰) ──
 function renderTimeline() {
+  if (loadFailed) return; // 로드 실패 문구를 검색/필터가 덮어쓰지 않도록
   const q = query.trim().toLowerCase();
   const shown = rows.filter(r =>
     (filter === '전체' || r[3].includes(filter)) &&
@@ -359,26 +360,30 @@ function monthCounts() {
   if (!c.size) return [];
   const keys = [...c.keys()].sort();
   const [sy, sm] = keys[0].split('-').map(Number);
-  const [ey, em] = keys[keys.length - 1].split('-').map(Number);
+  // 마지막 기록 이후의 공백도 보이도록 오늘 달까지 채운다 (미래 기록이 있으면 그쪽 우선)
+  const now = new Date();
+  const [ey, em] = [keys[keys.length - 1], now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0')]
+    .sort().pop().split('-').map(Number);
   const out = [];
   for (let y = sy, m = sm; y < ey || (y === ey && m <= em); m === 12 ? (y++, m = 1) : m++)
     out.push({ key: y + '-' + String(m).padStart(2, '0'), y, m, n: c.get(y + '-' + String(m).padStart(2, '0')) || 0 });
-  return out.slice(-12); // 최근 12개월
+  return out.slice(-12); // 오늘 기준 최근 12개월
 }
 
 function renderChart() {
   const data = monthCounts();
   if (!data.length) { $('chart').innerHTML = '<p class="muted">데이터 없음</p>'; return; }
   const max = Math.max(...data.map(d => d.n), 1);
-  const slotW = Math.max(34, Math.min(60, Math.floor(300 / data.length)));
-  const padL = 6, padR = 6, padT = 20, padB = 22, H = 148;
-  const W = padL + padR + slotW * data.length;
+  // viewBox 폭 고정: 월 수가 적어도 CSS 확대가 일어나지 않도록 남는 폭은 여백으로 흡수
+  const W = 312, padL = 6, padR = 6, padT = 20, padB = 22, H = 148;
+  const slotW = Math.min(60, (W - padL - padR) / data.length);
+  const offX = padL + (W - padL - padR - slotW * data.length) / 2; // 슬롯 묶음 가운데 정렬
   const plotH = H - padT - padB, baseY = H - padB;
   const barW = Math.min(24, slotW - 10);
   let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 작업 수">`;
   svg += `<line class="axis" x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"/>`;
   data.forEach((d, i) => {
-    const x = padL + i * slotW + (slotW - barW) / 2;
+    const x = offX + i * slotW + (slotW - barW) / 2;
     const cx = x + barW / 2;
     if (d.n) {
       const h = Math.max(4, Math.round(plotH * d.n / max));
@@ -475,6 +480,7 @@ async function init() {
     $('last-active').textContent = latest ? `마지막 활동 ${latest}` : '';
     renderStats(); renderFilters(); renderTimeline(); renderChart();
   } catch {
+    loadFailed = true;
     $('timeline').innerHTML = '<p class="err">WORKLOG.md를 불러올 수 없습니다. 서버를 레포 루트에서 실행했는지 확인하세요 (hub/serve.cmd 사용 권장).</p>';
   }
   loadDocs();
