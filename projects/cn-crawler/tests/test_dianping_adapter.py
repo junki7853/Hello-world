@@ -20,6 +20,9 @@ from crawler.adapters.dianping import (
     [
         ("https://m.dianping.com/ugcdetail/3099928252?sceneType=0&bizType=29", "3099928252"),
         ("https://m.dianping.com/ugcdetail/123", "123"),
+        # 실사용 시트에서 관측된 피드 상세 URL 형 (utm 등 쿼리가 붙어도 동일)
+        ("https://m.dianping.com/feeddetail/3099928252?utm_source=share", "3099928252"),
+        ("https://m.dianping.com/feeddetail/987654321", "987654321"),
         ("https://www.dianping.com/shop/H8gTDqYyzeVStDrw", "H8gTDqYyzeVStDrw"),
         ("https://www.dianping.com/detail?contentId=555", "555"),
     ],
