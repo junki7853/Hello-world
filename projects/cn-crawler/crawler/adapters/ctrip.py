@@ -70,6 +70,8 @@ class CtripAdapter(Adapter):
     ) -> None:
         """관심 있는 XHR 응답 본문을 저장한다. 파싱은 나중에."""
         url = resp.url
+        if "json" not in resp.headers.get("content-type", ""):
+            return  # 이미지·정적자원 등 비 JSON 응답은 건너뛴다
         try:
             if _COMMENT_LIST_MARKER in url:
                 captured["comment_list"] = resp.text()
