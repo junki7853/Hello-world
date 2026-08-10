@@ -9,7 +9,9 @@ from crawler.adapters.douyin import (
     _SHORT_CODE_PREFIX,
     _SHORT_LINK_HOSTS,
     DouyinAdapter,
+    _canonical_detail_url,
     _format_create_time,
+    _resolve_aweme_id,
     _static_aweme_id,
     detect_walls,
     extract_followers,
@@ -49,6 +51,37 @@ def test_short_link_detected_and_resolved_from_final_url():
     assert _static_aweme_id(final) == _AWEME_ID
     # 최종 URL 에서도 못 얻으면(verify 리다이렉트) 단축코드가 식별자
     assert short_link_code(short, _SHORT_CODE_PREFIX) == "douyin-short:AbCdEfG"
+
+
+def test_resolve_aweme_id_from_final_url():
+    """정찰 실측 체인: 최종 랜딩이 표준 상세면 최종 URL 에서 바로 해석된다."""
+    final = f"https://www.douyin.com/video/{_AWEME_ID}?previous_page=web_code_link"
+    assert _resolve_aweme_id(final, []) == _AWEME_ID
+
+
+def test_resolve_aweme_id_falls_back_to_redirect_chain():
+    """최종 랜딩이 홈/verify 로 튕겨도 중간 홉(iesdouyin 공유 URL)에서 해석한다."""
+    chain = [
+        "https://v.douyin.com/AbCdEfG/",
+        f"https://www.iesdouyin.com/share/video/{_AWEME_ID}/?region=VN&mid=123",
+        "https://www.douyin.com/verify?from=share",
+    ]
+    assert _resolve_aweme_id("https://www.douyin.com/verify?from=share", chain) == _AWEME_ID
+
+
+def test_resolve_aweme_id_none_when_chain_has_no_id():
+    chain = ["https://v.douyin.com/AbCdEfG/", "https://www.douyin.com/"]
+    assert _resolve_aweme_id("https://www.douyin.com/", chain) is None
+
+
+def test_canonical_detail_url_prefers_note_when_chain_says_note():
+    chain = [f"https://www.iesdouyin.com/share/note/{_AWEME_ID}/?region=VN"]
+    assert _canonical_detail_url(_AWEME_ID, chain) == (
+        f"https://www.douyin.com/note/{_AWEME_ID}"
+    )
+    assert _canonical_detail_url(_AWEME_ID, ["https://www.douyin.com/"]) == (
+        f"https://www.douyin.com/video/{_AWEME_ID}"
+    )
 
 
 def test_static_aweme_id_rejects_non_numeric_query():
