@@ -1,0 +1,11 @@
+# 시크릿·로컬 데이터는 절대 커밋하지 않는다
+.env
+data/
+*.db
+targets.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
