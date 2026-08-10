@@ -22,11 +22,17 @@ from __future__ import annotations
 import json
 import logging
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from playwright.sync_api import Page, Response
 
-from crawler.adapters.base import Adapter, extract_labeled_counts, navigate_and_settle
+from crawler.adapters.base import (
+    Adapter,
+    UnsupportedUrlError,
+    extract_labeled_counts,
+    navigate_and_settle,
+    static_id_from_url,
+)
 from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
@@ -82,17 +88,12 @@ class MafengwoAdapter(Adapter):
 
     def parse_article_id(self, url: str) -> str:
         """경로 /i/<id>.html, 쿼리 iid, weng 경로의 쿼리 id 에서 게시물 id 를 파싱한다."""
-        parsed = urlparse(url)
-        match = _PATH_ID_PATTERN.search(parsed.path)
-        if match:
-            return match.group(1)
-        query = parse_qs(parsed.query)
-        query_keys = ("iid", "id") if _WENG_PATH_MARKER in parsed.path else ("iid",)
-        for key in query_keys:
-            values = query.get(key)
-            if values and values[0]:
-                return values[0]
-        raise ValueError(f"URL 에서 마펑워 게시물 id 를 찾을 수 없습니다: {url}")
+        is_weng = _WENG_PATH_MARKER in urlparse(url).path
+        query_keys = ("iid", "id") if is_weng else ("iid",)
+        article_id = static_id_from_url(url, _PATH_ID_PATTERN, query_keys)
+        if article_id is None:
+            raise UnsupportedUrlError(f"URL 에서 마펑워 게시물 id 를 찾을 수 없습니다: {url}")
+        return article_id
 
     def collect(self, url: str) -> Metrics:
         article_id = self.parse_article_id(url)
