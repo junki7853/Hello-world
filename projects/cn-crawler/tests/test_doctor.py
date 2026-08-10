@@ -1,5 +1,6 @@
 """doctor 판정 로직(월 감지→상태 매핑, 지표 유무) 테스트. 실브라우저 불필요."""
 
+import io
 import json
 
 from crawler.core.doctor import (
@@ -10,6 +11,7 @@ from crawler.core.doctor import (
     OK,
     REDIRECTED,
     classify_metrics,
+    emit_report,
     format_report,
 )
 from crawler.core.schema import Metrics
@@ -99,3 +101,20 @@ def test_format_report_lists_each_platform():
     )
     assert "douyin" in report and "xiaohongshu" in report
     assert OK in report and LOGIN_WALL in report
+
+
+def test_emit_report_survives_encoding_limited_stream():
+    # Windows 콘솔(cp949) 재현: 인코딩이 제한된 스트림에 비-ASCII(em-dash·⚠·한글)를
+    # 써도 UnicodeEncodeError 로 크래시하지 않아야 한다.
+    report = format_report(
+        [("douyin", OK, "정상 렌더 — ⚠ 폰트 난독화 감지")]
+    )
+    for encoding in ("ascii", "cp949"):
+        stream = io.TextIOWrapper(
+            io.BytesIO(), encoding=encoding, errors="strict", newline=""
+        )
+        emit_report(report, stream=stream)  # 예외가 나면 테스트 실패
+        stream.flush()
+        stream.seek(0)
+        # 출력이 실제로 기록됐는지(플랫폼명은 두 인코딩 모두 표현 가능)
+        assert "douyin" in stream.buffer.getvalue().decode(encoding, errors="replace")

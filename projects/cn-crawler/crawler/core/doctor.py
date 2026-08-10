@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 from crawler.adapters.base import Adapter, UnsupportedUrlError
 from crawler.core.browser import BrowserSession
@@ -26,7 +27,6 @@ APP_WALL = "APP_WALL"
 REDIRECTED = "REDIRECTED"
 NO_DATA = "NO_DATA"
 NO_URL = "NO_URL"
-NO_ADAPTER = "NO_ADAPTER"
 BAD_URL = "BAD_URL"
 ERROR = "ERROR"
 
@@ -51,7 +51,6 @@ _STATUS_HINT = {
     REDIRECTED: "타깃 이탈(리다이렉트) — 쿠키 만료 또는 지역차단 의심",
     NO_DATA: "차단 신호는 없으나 지표 미검출 — 프록시(지역)·쿠키·URL 확인",
     NO_URL: "테스트 URL 미제공 — --check-url <platform>=<공개 게시물 URL> 로 제공",
-    NO_ADAPTER: "지원하지 않는 플랫폼",
     BAD_URL: "URL 형식을 어댑터가 해석하지 못함",
     ERROR: "수집 중 예외 — 프록시/네트워크 확인",
 }
@@ -98,6 +97,23 @@ def format_report(results: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
+def emit_report(report: str, stream=None) -> None:
+    """리포트를 인코딩 안전하게 출력한다.
+
+    doctor 는 사용자가 콘솔에서 직접 돌리는 명령인데, Windows 기본 콘솔(cp949)은
+    리포트의 em-dash·⚠ 같은 비-ASCII 를 인코딩하지 못해 UnicodeEncodeError 로
+    크래시한다. 스트림 인코딩으로 못 담는 문자는 대체문자로 바꿔 출력한다.
+    """
+    stream = sys.stdout if stream is None else stream
+    text = report + "\n"
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        safe = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        stream.write(safe)
+
+
 def run_doctor(
     checks: list[tuple[str, str | None]],
     adapter_registry: dict[str, type[Adapter]],
@@ -114,11 +130,8 @@ def run_doctor(
             if not url:
                 results.append((platform, NO_URL, _STATUS_HINT[NO_URL]))
                 continue
-            adapter_cls = adapter_registry.get(platform)
-            if adapter_cls is None:
-                results.append((platform, NO_ADAPTER, _STATUS_HINT[NO_ADAPTER]))
-                continue
-            adapter = adapter_cls(session)
+            # platform 은 resolve_check_plan 이 ADAPTER_REGISTRY 로만 생성하므로 항상 존재
+            adapter = adapter_registry[platform](session)
             try:
                 metrics = adapter.collect(url)
             except UnsupportedUrlError as exc:
@@ -131,5 +144,5 @@ def run_doctor(
             status, detail = classify_metrics(metrics)
             results.append((platform, status, detail))
 
-    print(format_report(results))
+    emit_report(format_report(results))
     return 0 if results and all(s == OK for _, s, _ in results) else 1
