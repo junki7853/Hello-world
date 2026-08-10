@@ -32,13 +32,22 @@ _DESKTOP_USER_AGENT = (
 )
 _DESKTOP_VIEWPORT = {"width": 1440, "height": 900}
 
-# navigator.webdriver 등 흔한 자동화 신호를 지우는 최소 stealth 스크립트
-_STEALTH_SCRIPT = """
+# navigator.webdriver 등 흔한 자동화 신호를 지우는 최소 stealth 스크립트.
+# platform 은 UA 와 모순되면 오히려 봇 신호가 된다 → 컨텍스트별로 맞춘다
+# (도우인에서 iPhone platform + 데스크톱 UA 조합이 빈 페이지로 이어지는 것을 실측).
+_STEALTH_SCRIPT_BASE = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
-Object.defineProperty(navigator, 'platform', {get: () => 'iPhone'});
 window.chrome = window.chrome || {runtime: {}};
 """
+_STEALTH_SCRIPT = (
+    _STEALTH_SCRIPT_BASE
+    + "Object.defineProperty(navigator, 'platform', {get: () => 'iPhone'});\n"
+)
+_DESKTOP_STEALTH_SCRIPT = (
+    _STEALTH_SCRIPT_BASE
+    + "Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});\n"
+)
 
 
 def _registrable_domain(hostname: str) -> str:
@@ -141,7 +150,7 @@ class BrowserSession:
                 viewport=_DESKTOP_VIEWPORT,
                 locale="zh-CN",
             )
-            self._desktop_context.add_init_script(_STEALTH_SCRIPT)
+            self._desktop_context.add_init_script(_DESKTOP_STEALTH_SCRIPT)
         return self._desktop_context
 
     @contextmanager

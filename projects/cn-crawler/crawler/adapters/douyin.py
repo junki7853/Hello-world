@@ -110,8 +110,10 @@ class DouyinAdapter(Adapter):
             dom = self._read_dom(page)
 
         article_id = static_id or _static_aweme_id(final_url) or _short_link_code(url)
-        walls = detect_walls(final_url, body_text)
+        walls = detect_walls(final_url, body_text, expected_id=article_id)
         if walls:
+            # redirected_away 포함: DOM 은 리다이렉트된 다른 영상의 지표일 수
+            # 있으므로(진선 modal 리다이렉트 실측) 통째로 버린다
             dom = {}
         detail = self._target_detail(captured, article_id)
         xhr = self._xhr_counts(detail)
@@ -273,13 +275,22 @@ def _format_create_time(create_time: object) -> str | None:
     return datetime.fromtimestamp(create_time, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def detect_walls(final_url: str, body_text: str) -> dict[str, bool]:
-    """최종 URL·본문 텍스트로 verify 슬라이더/중간페이지를 감지한다."""
+def detect_walls(
+    final_url: str, body_text: str, expected_id: str | None = None
+) -> dict[str, bool]:
+    """최종 URL·본문 텍스트로 verify 슬라이더/중간페이지·타깃 이탈을 감지한다.
+
+    expected_id 가 최종 URL 에서 사라졌다면 다른 영상으로 리다이렉트된 것이다
+    (실측: /video/<id> 가 jingxuan?modal_id=<다른 id> 로 이동) — 이때 DOM 값은
+    엉뚱한 영상의 지표이므로 호출부가 버려야 한다.
+    """
     walls: dict[str, bool] = {}
     if _VERIFY_URL_MARKER in final_url or any(
         marker in body_text for marker in _VERIFY_TEXT_MARKERS
     ):
         walls["verify_wall"] = True
+    if expected_id and expected_id not in final_url:
+        walls["redirected_away"] = True
     return walls
 
 

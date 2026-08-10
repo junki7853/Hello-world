@@ -66,7 +66,15 @@ def test_detects_verify_redirect_url():
 
 def test_no_wall_on_normal_page():
     """verify SDK 정적 JS 는 정상 페이지에도 로드된다 → 본문/URL 마커만 판정."""
-    assert detect_walls(f"https://www.douyin.com/video/{_AWEME_ID}", "全部评论") == {}
+    final = f"https://www.douyin.com/video/{_AWEME_ID}"
+    assert detect_walls(final, "全部评论", expected_id=_AWEME_ID) == {}
+
+
+def test_detects_redirect_to_other_video():
+    """실측: /video/<id> 가 jingxuan?modal_id=<다른 id> 로 리다이렉트되면
+    DOM 은 엉뚱한 영상의 지표다 → redirected_away 로 감지해 버린다."""
+    final = "https://www.douyin.com/jingxuan?modal_id=7671211898179718400"
+    assert detect_walls(final, "", expected_id=_AWEME_ID) == {"redirected_away": True}
 
 
 # --- XHR 타깃 매칭 ----------------------------------------------------------

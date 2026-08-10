@@ -71,8 +71,16 @@ def test_detects_app_wall_from_body():
     }
 
 
+def test_detects_login_wall_from_body_and_redirect_away():
+    """실측: 접근 불가 노트가 /explore 전면 로그인 화면으로 리다이렉트된다."""
+    body = "登录后推荐更懂你的笔记\n手机号登录\n+86\n获取验证码"
+    walls = detect_walls("https://www.xiaohongshu.com/explore", body, expected_id=_NOTE_ID)
+    assert walls == {"login_wall": True, "redirected_away": True}
+
+
 def test_no_wall_on_normal_page():
-    assert detect_walls(f"https://www.xiaohongshu.com/explore/{_NOTE_ID}", "点赞 38") == {}
+    final = f"https://www.xiaohongshu.com/explore/{_NOTE_ID}"
+    assert detect_walls(final, "点赞 38", expected_id=_NOTE_ID) == {}
 
 
 # --- DOM 텍스트 추출 --------------------------------------------------------

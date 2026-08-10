@@ -55,6 +55,9 @@ _SECURITY_URL_MARKERS = ("/404/sec_", "xhs_sec_server")
 _CAPTCHA_URL_MARKER = "website-login/captcha"
 _LOGIN_URL_MARKER = "/website-login/"
 _APP_WALL_TEXT = "仅支持在小红书 APP 内查看"
+# 노트가 안 열리고 전면 로그인 화면으로 대체될 때의 본문 마커 (실측: 가짜/무토큰
+# 노트 id 가 /explore 로그인 화면으로 리다이렉트됨)
+_LOGIN_WALL_TEXTS = ("手机号登录", "登录后推荐更懂你的笔记")
 
 # 렌더된 본문 텍스트 패턴. 라벨→숫자를 먼저 두는 관례에 더해, 구분자를
 # [^\S\n](개행 제외 공백)로 제한해 어느 방향으로도 줄을 넘어 훔치지 않게 한다.
@@ -113,7 +116,7 @@ class XiaohongshuAdapter(Adapter):
             self._capture_initial_state(page, captured)
 
         article_id = static_id or _static_note_id(final_url) or _short_link_code(url)
-        walls = detect_walls(final_url, body_text)
+        walls = detect_walls(final_url, body_text, expected_id=static_id)
         xhr = self._xhr_counts(captured, article_id)
         dom = extract_metrics_from_text(body_text) if not walls else {}
         return self._build_metrics(
@@ -230,17 +233,27 @@ def _short_link_code(url: str) -> str:
     return f"xhslink:{path}"
 
 
-def detect_walls(final_url: str, body_text: str) -> dict[str, bool]:
-    """최종 URL·본문 텍스트로 보안월/캡차월/로그인월/앱월을 감지한다."""
+def detect_walls(
+    final_url: str, body_text: str, expected_id: str | None = None
+) -> dict[str, bool]:
+    """최종 URL·본문 텍스트로 보안월/캡차월/로그인월/앱월을 감지한다.
+
+    expected_id 가 있는데 최종 URL 에서 사라졌다면(노트 대신 홈/로그인 화면으로
+    리다이렉트) redirected_away 로 기록한다 — 실측된 차단 형태.
+    """
     walls: dict[str, bool] = {}
     if any(marker in final_url for marker in _SECURITY_URL_MARKERS):
         walls["security_wall"] = True
     if _CAPTCHA_URL_MARKER in final_url:
         walls["captcha_wall"] = True
-    elif _LOGIN_URL_MARKER in final_url:
+    elif _LOGIN_URL_MARKER in final_url or any(
+        marker in body_text for marker in _LOGIN_WALL_TEXTS
+    ):
         walls["login_wall"] = True
     if _APP_WALL_TEXT in body_text:
         walls["app_wall"] = True
+    if expected_id and expected_id not in final_url:
+        walls["redirected_away"] = True
     return walls
 
 
