@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 from crawler.adapters.base import Adapter
 from crawler.adapters.ctrip import CtripAdapter
+from crawler.adapters.mafengwo import MafengwoAdapter
 from crawler.core.browser import BrowserSession
 from crawler.core.export import export_csv
 from crawler.core.ratelimit import delay_range_from_env, polite_sleep
@@ -32,6 +33,7 @@ DEFAULT_DB_PATH = "data/crawler.db"
 # 플랫폼 이름 → 어댑터 클래스. Phase 2+ 에서 여기에 추가한다.
 ADAPTER_REGISTRY: dict[str, type[Adapter]] = {
     "ctrip": CtripAdapter,
+    "mafengwo": MafengwoAdapter,
 }
 
 
