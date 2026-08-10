@@ -85,6 +85,20 @@ def test_migrates_phase1_db_preserving_rows(tmp_path):
         assert store.latest("ctrip", "99").followers == 10
 
 
+def test_migration_is_idempotent_on_reopen(tmp_path):
+    """이미 마이그레이션된 DB 를 다시 열어도 ALTER 재실행/에러 없이 행이 보존된다."""
+    db = tmp_path / "t.db"
+    with Store(db) as store:
+        store.append(_metrics(article_id="7", followers=10))
+    with Store(db) as store:  # 재오픈 1
+        assert store.latest("ctrip", "7").followers == 10
+    with Store(db) as store:  # 재오픈 2 — 여전히 정상
+        store.append(_metrics(article_id="7", followers=11,
+                              collected_at="2026-08-11T00:00:00+00:00"))
+        assert store.latest("ctrip", "7").followers == 11
+        assert len(store.history("ctrip", "7")) == 2
+
+
 # --- latest_all / all_snapshots -------------------------------------------
 
 def test_latest_all_picks_newest_per_article(tmp_path):
@@ -147,6 +161,26 @@ def test_export_csv_none_becomes_empty_cell(tmp_path):
     cols = dict(zip(EXPORT_COLUMNS, row))
     assert cols["comments"] == "6"
     assert cols["likes"] == ""
+
+
+def test_export_csv_escapes_formula_cells(tmp_path):
+    """스크랩된 값이 =/+/@/- 로 시작하면 엑셀 수식 실행을 막게 이스케이프한다."""
+    db = tmp_path / "t.db"
+    out = tmp_path / "out.csv"
+    with Store(db) as store:
+        store.append(_metrics(
+            author="=HYPERLINK(\"https://evil.example\")",
+            post_format="-video",
+            upload_date="+2026",
+        ))
+        export_csv(store, out)
+    import csv as csv_mod
+    with open(out, encoding="utf-8-sig", newline="") as f:
+        row = dict(zip(EXPORT_COLUMNS, list(csv_mod.reader(f))[1]))
+    assert row["author"].startswith("'=")
+    assert row["post_format"] == "'-video"
+    assert row["upload_date"] == "'+2026"
+    assert row["platform"] == "ctrip"  # 일반 값은 그대로
 
 
 # --- CLI --export -----------------------------------------------------------

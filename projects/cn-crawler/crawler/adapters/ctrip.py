@@ -169,8 +169,9 @@ class CtripAdapter(Adapter):
 
     # --- 병합 -------------------------------------------------------------
 
-    @staticmethod
+    @classmethod
     def _build_metrics(
+        cls,
         article_id: str,
         url: str,
         page_title: str,
@@ -179,14 +180,6 @@ class CtripAdapter(Adapter):
         captured: dict[str, object],
     ) -> Metrics:
         """XHR 우선, DOM 보조로 지표를 병합한다."""
-
-        def pick(key: str) -> int | None:
-            xhr_val = xhr.get(key)
-            if isinstance(xhr_val, int):
-                return xhr_val
-            dom_val = dom.get(key)
-            return dom_val if isinstance(dom_val, int) else None
-
         title = xhr.get("title")
         raw = json.dumps(
             {
@@ -204,11 +197,11 @@ class CtripAdapter(Adapter):
             url=url,
             title=title if isinstance(title, str) else None,
             author=xhr.get("author") if isinstance(xhr.get("author"), str) else None,
-            views=pick("views"),
-            likes=pick("likes"),
-            collects=pick("collects"),
-            comments=pick("comments"),
-            shares=pick("shares"),
+            views=cls.pick_metric(xhr, dom, "views"),
+            likes=cls.pick_metric(xhr, dom, "likes"),
+            collects=cls.pick_metric(xhr, dom, "collects"),
+            comments=cls.pick_metric(xhr, dom, "comments"),
+            shares=cls.pick_metric(xhr, dom, "shares"),
             raw=raw,
         )
 

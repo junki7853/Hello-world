@@ -4,11 +4,8 @@ import json
 
 import pytest
 
-from crawler.adapters.mafengwo import (
-    MafengwoAdapter,
-    _find_counts,
-    extract_metrics_from_text,
-)
+from crawler.adapters.base import find_counts
+from crawler.adapters.mafengwo import MafengwoAdapter, extract_metrics_from_text
 
 
 # --- article_id 파싱 --------------------------------------------------------
@@ -74,17 +71,19 @@ def test_find_counts_in_nested_json():
             "extra": {"fav_num": 14},
         },
     }
-    found = _find_counts(data)
+    found = find_counts(data, MafengwoAdapter.xhr_count_keys)
     assert found == {"likes": 38, "comments": 6, "views": 12000, "collects": 14}
 
 
 def test_find_counts_first_match_wins():
     data = [{"vote_num": 10}, {"vote_num": 99}]
-    assert _find_counts(data)["likes"] == 10
+    assert find_counts(data, MafengwoAdapter.xhr_count_keys)["likes"] == 10
 
 
 def test_find_counts_ignores_non_numeric():
-    assert _find_counts({"vote_num": None, "reply_num": [1]}) == {}
+    assert find_counts(
+        {"vote_num": None, "reply_num": [1]}, MafengwoAdapter.xhr_count_keys
+    ) == {}
 
 
 # --- 병합/진단 --------------------------------------------------------------

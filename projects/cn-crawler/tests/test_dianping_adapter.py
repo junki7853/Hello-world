@@ -4,9 +4,10 @@ import json
 
 import pytest
 
+from crawler.adapters.base import find_counts
 from crawler.adapters.dianping import (
     DianpingAdapter,
-    _find_counts,
+    detect_font_obfuscation,
     detect_walls,
     extract_metrics_from_text,
 )
@@ -74,12 +75,31 @@ def test_find_counts_in_nested_json():
             "author": {"followerCount": 345},
         },
     }
-    found = _find_counts(data)
+    found = find_counts(data, DianpingAdapter.xhr_count_keys)
     assert found == {"likes": 38, "comments": 6, "views": 12000, "followers": 345}
 
 
 def test_find_counts_ignores_non_numeric():
-    assert _find_counts({"likeCount": None, "viewCount": {"x": 1}}) == {}
+    assert find_counts(
+        {"likeCount": None, "viewCount": {"x": 1}}, DianpingAdapter.xhr_count_keys
+    ) == {}
+
+
+# --- 폰트 난독화 감지 (라벨 인접 PUA 만) ------------------------------------
+
+def test_font_obfuscation_detected_near_label():
+    assert detect_font_obfuscation("点赞 ") is True
+    assert detect_font_obfuscation(" 人收藏") is True
+
+
+def test_font_obfuscation_ignores_iconfont_far_from_labels():
+    """UI 아이콘(iconfont)의 PUA 글리프가 지표 라벨과 멀면 오탐하지 않는다."""
+    text = " 首页   搜索\n\n某家餐厅的介绍文字\n\n点赞 38  收藏 14"
+    assert detect_font_obfuscation(text) is False
+
+
+def test_font_obfuscation_false_without_pua():
+    assert detect_font_obfuscation("点赞 38 收藏 14") is False
 
 
 # --- 병합/진단 --------------------------------------------------------------
