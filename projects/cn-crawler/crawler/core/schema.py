@@ -50,5 +50,9 @@ class Metrics:
     collects: int | None = None
     comments: int | None = None
     shares: int | None = None
+    impressions: int | None = None  # 노출수 (조회수와 구분되는 플랫폼용)
+    followers: int | None = None  # 작성자 팔로워 수
+    upload_date: str | None = None  # 게시물 업로드일 (플랫폼 표기 그대로 or ISO)
+    post_format: str | None = None  # 게시물 형식: 이미지/영상 등
     collected_at: str = field(default_factory=utc_now_iso)
     raw: str | None = None  # 수집 원본 일부 (디버깅용)

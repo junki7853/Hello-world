@@ -3,6 +3,8 @@
 사용 예:
     python -m crawler.cli --csv targets.csv
     python -m crawler.cli --url ctrip=https://m.ctrip.com/webapp/you/community/detail?articleId=266207894
+    python -m crawler.cli --export out.csv            # 게시물별 최신값 CSV
+    python -m crawler.cli --export out.csv --all      # 전체 이력 CSV
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from dotenv import load_dotenv
 from crawler.adapters.base import Adapter
 from crawler.adapters.ctrip import CtripAdapter
 from crawler.core.browser import BrowserSession
+from crawler.core.export import export_csv
 from crawler.core.ratelimit import delay_range_from_env, polite_sleep
 from crawler.core.store import Store
 
@@ -70,6 +73,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="PLATFORM=URL",
         help="인라인 타깃 (반복 가능)",
+    )
+    source.add_argument(
+        "--export",
+        metavar="OUT_CSV",
+        help="수집 대신 DB 를 CSV 로 내보낸다 (UTF-8-BOM, 기본: 게시물별 최신값)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="--export 시 최신값 대신 전체 이력을 내보낸다",
     )
     parser.add_argument(
         "--db",
@@ -131,6 +144,16 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    if args.export:
+        with Store(args.db) as store:
+            written = export_csv(store, args.export, latest_only=not args.all)
+        logger.info(
+            "export 완료: %d행 → %s (%s)",
+            written,
+            args.export,
+            "전체 이력" if args.all else "게시물별 최신값",
+        )
+        return 0 if written > 0 else 1
     try:
         targets = resolve_targets(args)
     except (ValueError, FileNotFoundError) as exc:
