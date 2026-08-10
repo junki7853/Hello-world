@@ -162,7 +162,7 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 
 ## 운영 노트 — 정상 수집엔 중국 IP·쿠키가 필요하다
 
-이 크롤러는 차단을 **우회하지 않고 감지 후 기록**한다(`raw` 의 `*_wall`/`captcha_detected` 진단). 비중국 IP·비로그인 환경에서 기대할 수 있는 것:
+이 크롤러는 차단을 **우회하지 않고 감지 후 기록**한다(`raw` 의 `*_wall`/`captcha_detected` 진단). 월 플래그(`login_wall`/`verify_wall`/`redirected_away`)가 떠도 **타깃 id 정확매칭 XHR 로 채워진 지표값은 신뢰할 수 있다** — 엉뚱한 게시물의 값은 매칭에서 걸러져 `None` 으로 빠진다. 비중국 IP·비로그인 환경에서 기대할 수 있는 것:
 
 | 플랫폼 | 이 환경의 결과 | 실값 수집 조건 |
 |--------|----------------|----------------|
