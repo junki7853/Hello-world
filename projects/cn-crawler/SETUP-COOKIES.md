@@ -55,6 +55,10 @@ with sync_playwright() as p:
 
 플랫폼명은 소문자: `xiaohongshu` / `dianping` / `douyin` / `ctrip` / `mafengwo`. env 키는 대문자(`CRAWLER_COOKIES_XIAOHONGSHU`).
 
+> 🔒 **쿠키/세션 파일은 반드시 `.gitignore` 된 위치에 둔다.** 기본 권장 위치는 저장소의 `cookies/` 디렉터리로, `.gitignore` 가 `cookies/` 와 실제 파일명(`<platform>.json`/`.txt`)을 위치 무관하게 무시한다. 로컬 개발이면 `CRAWLER_COOKIES_DIR=./cookies` 처럼 이 안을 가리켜 실제 로그인 세션이 공개 저장소로 새지 않게 한다.
+>
+> 📦 **컨테이너/서비스 배포 시** `CRAWLER_COOKIES_DIR` 은 CWD 의존을 피해 **절대경로 또는 마운트 볼륨**을 쓴다(예: `/run/secrets/cn-crawler-cookies`, `/data/cookies`). 상대경로는 실행 디렉터리에 따라 파일을 못 찾을 수 있다.
+
 ---
 
 ## 2. 중국 프록시 설정
@@ -74,7 +78,7 @@ CRAWLER_PROXY_USERNAME=myuser
 CRAWLER_PROXY_PASSWORD=mypass
 ```
 
-`server` 는 `http://host:port` 로 정규화되고, 인증정보는 Playwright 의 `username`/`password` 로 분리 전달된다.
+`server` 는 `http://host:port` 로 정규화되고, 인증정보는 Playwright 의 `username`/`password` 로 분리 전달된다. URL 임베드 인증의 특수문자는 percent-encoding 해야 한다(`@`→`%40`, `:`→`%3A`). **비밀번호에 `@`·`:`·`/` 같은 특수문자가 있으면 URL 임베드 대신 `CRAWLER_PROXY_USERNAME`/`CRAWLER_PROXY_PASSWORD` 분리 지정을 권장한다** — 인코딩 실수로 인한 인증 실패를 피할 수 있다.
 
 ---
 
