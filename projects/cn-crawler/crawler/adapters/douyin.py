@@ -16,7 +16,12 @@
   뜨면(拖动滑块/验证码中间页) 자동돌파 없이 감지 → None + raw degrade.
   verify SDK 정적 JS(rc-verifycenter)는 정상 페이지에도 로드되므로 마커로 쓰지 않는다.
 
-단축링크(v.douyin.com/<code>)는 리다이렉트 후 최종 URL 에서 aweme_id 를 해석한다.
+단축링크(v.douyin.com/<code>) 정찰 실측 (2026-08):
+- 302 체인: v.douyin.com/<code> → www.iesdouyin.com/share/video/<aweme_id>/?…
+  → www.douyin.com/video/<aweme_id>?previous_page=web_code_link (detail XHR 발화).
+- 최종 랜딩이 홈/verify 로 튕기는 변형에 대비해 최종 URL 뿐 아니라 리다이렉트
+  체인 전체에서 aweme_id 를 재해석하고, 랜딩이 공유월이라 detail XHR 이 안 뜨면
+  표준 상세(/video/<id>)로 재진입해 modal_id 경로와 동일하게 수집한다.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from playwright.sync_api import Page, Response
 from crawler.adapters.base import (
     XHR_BODY_MAX_LEN,
     Adapter,
+    UnsupportedUrlError,
     detect_redirect_away,
     find_counts,
     find_subtree_by_id,
@@ -96,33 +102,53 @@ class DouyinAdapter(Adapter):
         """
         aweme_id = _static_aweme_id(url)
         if aweme_id is None:
-            raise ValueError(f"URL 에서 도우인 aweme_id 를 찾을 수 없습니다: {url}")
+            raise UnsupportedUrlError(f"URL 에서 도우인 aweme_id 를 찾을 수 없습니다: {url}")
         return aweme_id
 
     def collect(self, url: str) -> Metrics:
-        static_id = (
-            None if is_short_link(url, _SHORT_LINK_HOSTS) else self.parse_article_id(url)
-        )
+        short = is_short_link(url, _SHORT_LINK_HOSTS)
+        static_id = None if short else self.parse_article_id(url)
         captured: dict[str, object] = {"json_bodies": []}
-
-        def on_response(resp: Response) -> None:
-            # 플랫폼 고유부: detail XHR 만 수집 (피드/시리즈 응답 오염 차단)
-            if _DETAIL_XHR_MARKER in resp.url:
-                self.capture_count_json(resp, captured, max_len=XHR_BODY_MAX_LEN)
+        nav_urls: list[str] = []
+        diag: dict[str, object] = {}
 
         with self.session.page(url_for_cookies=url, desktop=True) as page:
+
+            def on_response(resp: Response) -> None:
+                # 플랫폼 고유부: detail XHR 만 수집 (피드/시리즈 응답 오염 차단)
+                if _DETAIL_XHR_MARKER in resp.url:
+                    self.capture_count_json(resp, captured, max_len=XHR_BODY_MAX_LEN)
+                # 단축링크 해석용: 메인 프레임 내비게이션(302 홉 포함) URL 기록
+                try:
+                    if resp.request.is_navigation_request() and resp.frame == page.main_frame:
+                        nav_urls.append(resp.url)
+                except Exception as exc:  # 응답/프레임이 이미 사라진 경우 등 메타접근 방어
+                    logger.debug("도우인 내비게이션 메타 읽기 실패 %s: %s", resp.url[:80], exc)
+
             page.on("response", on_response)
             navigate_and_settle(page, url, _SETTLE_WAIT_MS)
+            resolved_id = static_id or _resolve_aweme_id(page.url, nav_urls)
+            if short:
+                diag["short_resolved"] = resolved_id is not None
+            if (
+                short
+                and resolved_id is not None
+                and self._target_detail(captured, resolved_id) is None
+            ):
+                # 랜딩이 공유월/중간 페이지라 detail XHR 이 안 떴다 →
+                # 표준 상세로 재진입해 modal_id 경로와 동일하게 수집한다
+                diag["renavigated"] = True
+                navigate_and_settle(
+                    page,
+                    _canonical_detail_url(resolved_id, [page.url, *nav_urls]),
+                    _SETTLE_WAIT_MS,
+                )
             final_url = page.url
             page_title = page.title()
             body_text = self.page_body_text(page)
             dom = self._read_dom(page)
 
-        article_id = (
-            static_id
-            or _static_aweme_id(final_url)
-            or short_link_code(url, _SHORT_CODE_PREFIX)
-        )
+        article_id = resolved_id or short_link_code(url, _SHORT_CODE_PREFIX)
         walls = detect_walls(final_url, body_text)
         walls.update(detect_redirect_away(final_url, article_id))
         if walls:
@@ -132,7 +158,8 @@ class DouyinAdapter(Adapter):
         detail = self._target_detail(captured, article_id)
         xhr = self._xhr_counts(detail)
         return self._build_metrics(
-            article_id, url, final_url, page_title, dom, xhr, detail, captured, walls
+            article_id, url, final_url, page_title, dom, xhr, detail, captured, walls,
+            diag=diag,
         )
 
     # --- 플랫폼 고유부 -----------------------------------------------------
@@ -211,6 +238,7 @@ class DouyinAdapter(Adapter):
         detail: dict | None,
         captured: dict[str, object],
         walls: dict[str, bool],
+        diag: dict[str, object] | None = None,
     ) -> Metrics:
         if walls:
             logger.warning("도우인 차단 감지 %s — 지표 없이 진단만 기록: %s", walls, url)
@@ -225,6 +253,7 @@ class DouyinAdapter(Adapter):
         raw = json.dumps(
             {
                 **walls,
+                **(diag or {}),
                 "captured_json": len(captured.get("json_bodies") or []),
                 "detail_matched": detail is not None,
                 "final_url": final_url[:200],
@@ -256,6 +285,25 @@ def _static_aweme_id(url: str) -> str | None:
     """URL 경로/쿼리에서 aweme_id 를 찾는다. 없으면 None (숫자 id 만 인정)."""
     aweme_id = static_id_from_url(url, _AWEME_ID_PATTERN, _QUERY_ID_KEYS)
     return aweme_id if aweme_id and aweme_id.isdigit() else None
+
+
+def _resolve_aweme_id(final_url: str, nav_urls: list[str]) -> str | None:
+    """최종 URL → 내비게이션 체인(최근 홉 우선)에서 aweme_id 를 찾는다.
+
+    단축링크는 iesdouyin 공유 페이지(/share/video/<id>)를 거치므로, 최종 랜딩이
+    홈/verify 로 튕겨도 중간 홉 URL 에 id 가 남아 있다 → 체인 전체를 본다.
+    """
+    for candidate in (final_url, *reversed(nav_urls)):
+        aweme_id = _static_aweme_id(candidate)
+        if aweme_id:
+            return aweme_id
+    return None
+
+
+def _canonical_detail_url(aweme_id: str, seen_urls: list[str]) -> str:
+    """재진입할 표준 상세 URL. 체인에 /note/<id> 가 있었으면 이미지 게시물이다."""
+    kind = "note" if any(f"/note/{aweme_id}" in u for u in seen_urls) else "video"
+    return f"https://www.douyin.com/{kind}/{aweme_id}"
 
 
 def _format_create_time(create_time: object) -> str | None:

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from crawler.adapters.base import Adapter
+from crawler.adapters.base import Adapter, UnsupportedUrlError
 from crawler.adapters.ctrip import CtripAdapter
 from crawler.adapters.dianping import DianpingAdapter
 from crawler.adapters.douyin import DouyinAdapter
@@ -127,6 +127,12 @@ def collect_targets(
             adapter = adapter_cls(session)
             try:
                 metrics = adapter.collect(url)
+            except UnsupportedUrlError as exc:
+                # 어댑터가 모르는 URL 형식(파싱 불가) — 진짜 미지원만 여기로 온다.
+                # 지원 URL 의 차단/로그인월은 어댑터가 degrade 행으로 처리하고,
+                # 그 외 예외(일반 ValueError 포함)는 스택 남는 수집 실패로 기록한다.
+                logger.warning("지원하지 않는 URL 형식 건너뜀: %s", exc)
+                continue
             except Exception:
                 logger.exception("수집 실패: %s", url)
                 continue

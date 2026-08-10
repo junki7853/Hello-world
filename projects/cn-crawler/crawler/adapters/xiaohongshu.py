@@ -28,6 +28,7 @@ from playwright.sync_api import Page, Response
 from crawler.adapters.base import (
     XHR_BODY_MAX_LEN,
     Adapter,
+    UnsupportedUrlError,
     detect_redirect_away,
     extract_labeled_counts,
     find_counts,
@@ -98,7 +99,7 @@ class XiaohongshuAdapter(Adapter):
         """
         note_id = _static_note_id(url)
         if note_id is None:
-            raise ValueError(f"URL 에서 샤오홍슈 노트 id 를 찾을 수 없습니다: {url}")
+            raise UnsupportedUrlError(f"URL 에서 샤오홍슈 노트 id 를 찾을 수 없습니다: {url}")
         return note_id
 
     def collect(self, url: str) -> Metrics:

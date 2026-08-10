@@ -26,15 +26,23 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Response
 
-from crawler.adapters.base import Adapter, extract_labeled_counts, navigate_and_settle
+from crawler.adapters.base import (
+    Adapter,
+    UnsupportedUrlError,
+    extract_labeled_counts,
+    navigate_and_settle,
+)
 from crawler.core.schema import Metrics
 
 logger = logging.getLogger(__name__)
 
 _SETTLE_WAIT_MS = 6_000
 
-# 노트 상세 /ugcdetail/3099928252, 샵 페이지 /shop/H8gTDqYy (영숫자 암호화 id)
+# 노트 상세 /ugcdetail/3099928252, 피드 상세 /feeddetail/3099928252 (같은 숫자 id
+# 체계 — 실사용 시트 URL 에서 관측, 정찰 결과 SMS 로그인월로 리다이렉트되므로
+# detect_walls 가 degrade 처리), 샵 페이지 /shop/H8gTDqYy (영숫자 암호화 id)
 _UGC_ID_PATTERN = re.compile(r"/ugcdetail/(\d+)")
+_FEED_ID_PATTERN = re.compile(r"/feeddetail/(\d+)")
 _SHOP_ID_PATTERN = re.compile(r"/shop/([A-Za-z0-9]+)")
 # 정찰에서 관측된 쿼리 키만 (feed XHR 의 contentId). 광범위한 "id" 폴백은
 # 무관한 URL 을 잘못 받아들이므로 두지 않는다.
@@ -83,9 +91,9 @@ class DianpingAdapter(Adapter):
     }
 
     def parse_article_id(self, url: str) -> str:
-        """/ugcdetail/<id>, /shop/<id>, 또는 contentId 쿼리에서 id 를 파싱한다."""
+        """/ugcdetail/<id>, /feeddetail/<id>, /shop/<id>, contentId 쿼리에서 id 를 파싱한다."""
         parsed = urlparse(url)
-        for pattern in (_UGC_ID_PATTERN, _SHOP_ID_PATTERN):
+        for pattern in (_UGC_ID_PATTERN, _FEED_ID_PATTERN, _SHOP_ID_PATTERN):
             match = pattern.search(parsed.path)
             if match:
                 return match.group(1)
@@ -94,7 +102,7 @@ class DianpingAdapter(Adapter):
             values = query.get(key)
             if values and values[0]:
                 return values[0]
-        raise ValueError(f"URL 에서 디엔핑 게시물/샵 id 를 찾을 수 없습니다: {url}")
+        raise UnsupportedUrlError(f"URL 에서 디엔핑 게시물/샵 id 를 찾을 수 없습니다: {url}")
 
     def collect(self, url: str) -> Metrics:
         article_id = self.parse_article_id(url)

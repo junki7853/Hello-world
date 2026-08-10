@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, Response
 
-from crawler.adapters.base import Adapter, navigate_and_settle
+from crawler.adapters.base import Adapter, UnsupportedUrlError, navigate_and_settle
 from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class CtripAdapter(Adapter):
         query = parse_qs(urlparse(url).query)
         values = query.get("articleId")
         if not values or not values[0]:
-            raise ValueError(f"URL 에서 articleId 를 찾을 수 없습니다: {url}")
+            raise UnsupportedUrlError(f"URL 에서 articleId 를 찾을 수 없습니다: {url}")
         return values[0]
 
     def collect(self, url: str) -> Metrics:
