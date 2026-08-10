@@ -9,6 +9,7 @@ from crawler.cli import (
     collect_targets,
     load_targets_from_csv,
     parse_inline_target,
+    resolve_check_plan,
     resolve_targets,
 )
 from crawler.core.schema import Metrics
@@ -67,6 +68,47 @@ def test_resolve_targets_from_inline():
 def test_parser_requires_a_source():
     with pytest.raises(SystemExit):
         build_arg_parser().parse_args([])
+
+
+# --- doctor(--check) 파싱·계획 ---------------------------------------------
+
+def test_check_is_a_valid_source():
+    args = build_arg_parser().parse_args(
+        ["--check", "all", "--check-url", "douyin=https://x/video/1"]
+    )
+    assert args.check == "all"
+    assert args.check_url == ["douyin=https://x/video/1"]
+
+
+def test_check_conflicts_with_other_sources():
+    with pytest.raises(SystemExit):
+        build_arg_parser().parse_args(["--check", "all", "--csv", "t.csv"])
+
+
+def test_resolve_check_plan_all_covers_registry():
+    plan = resolve_check_plan("all", ["douyin=https://x/video/1"])
+    platforms = [p for p, _ in plan]
+    assert set(platforms) == set(cli.ADAPTER_REGISTRY)
+    urls = dict(plan)
+    assert urls["douyin"] == "https://x/video/1"
+    assert urls["xiaohongshu"] is None  # URL 미제공 → None(NO_URL)
+
+
+def test_resolve_check_plan_single_platform():
+    plan = resolve_check_plan("dianping", ["dianping=https://x/ugcdetail/9"])
+    assert plan == [("dianping", "https://x/ugcdetail/9")]
+
+
+def test_resolve_check_plan_last_url_wins_per_platform():
+    plan = resolve_check_plan(
+        "douyin", ["douyin=https://x/1", "douyin=https://x/2"]
+    )
+    assert plan == [("douyin", "https://x/2")]
+
+
+def test_resolve_check_plan_rejects_unknown_platform():
+    with pytest.raises(ValueError):
+        resolve_check_plan("nope", [])
 
 
 # --- 배치 견고성 ------------------------------------------------------------

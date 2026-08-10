@@ -5,6 +5,8 @@
     python -m crawler.cli --url ctrip=https://m.ctrip.com/webapp/you/community/detail?articleId=266207894
     python -m crawler.cli --export out.csv            # 게시물별 최신값 CSV
     python -m crawler.cli --export out.csv --all      # 전체 이력 CSV
+    python -m crawler.cli --check all \
+        --check-url douyin=https://www.douyin.com/video/123  # 쿠키/프록시 진단
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from crawler.adapters.douyin import DouyinAdapter
 from crawler.adapters.mafengwo import MafengwoAdapter
 from crawler.adapters.xiaohongshu import XiaohongshuAdapter
 from crawler.core.browser import BrowserSession
+from crawler.core.doctor import run_doctor
 from crawler.core.export import export_csv
 from crawler.core.ratelimit import delay_range_from_env, polite_sleep
 from crawler.core.store import Store
@@ -87,6 +90,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="OUT_CSV",
         help="수집 대신 DB 를 CSV 로 내보낸다 (UTF-8-BOM, 기본: 게시물별 최신값)",
     )
+    source.add_argument(
+        "--check",
+        metavar="PLATFORM|all",
+        help="쿠키/프록시 진단: 테스트 URL 로 월/캡차/정상 렌더를 판정 (수집·저장 안 함)",
+    )
+    parser.add_argument(
+        "--check-url",
+        action="append",
+        metavar="PLATFORM=URL",
+        help="--check 용 테스트 URL (반복 가능, 플랫폼당 마지막 값 사용)",
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -106,6 +120,31 @@ def resolve_targets(args: argparse.Namespace) -> list[tuple[str, str]]:
     if args.csv:
         return load_targets_from_csv(args.csv)
     return [parse_inline_target(spec) for spec in args.url]
+
+
+def resolve_check_plan(
+    selector: str, check_urls: list[str] | None
+) -> list[tuple[str, str | None]]:
+    """--check 선택자와 --check-url 목록을 (platform, url|None) 순서 목록으로 만든다.
+
+    selector 가 'all' 이면 등록된 모든 플랫폼을, 아니면 그 플랫폼 하나만 검사한다.
+    URL 은 --check-url 에서 플랫폼별 마지막 값을 쓰고, 없으면 None(NO_URL) 로 둔다.
+    """
+    url_by_platform: dict[str, str] = {}
+    for spec in check_urls or []:
+        platform, url = parse_inline_target(spec)  # 'platform=URL' 재사용
+        url_by_platform[platform] = url
+
+    if selector == "all":
+        platforms = list(ADAPTER_REGISTRY)
+    elif selector in ADAPTER_REGISTRY:
+        platforms = [selector]
+    else:
+        raise ValueError(
+            f"--check 플랫폼이 올바르지 않습니다: {selector} "
+            f"(지원: {', '.join(ADAPTER_REGISTRY)}, all)"
+        )
+    return [(platform, url_by_platform.get(platform)) for platform in platforms]
 
 
 def collect_targets(
@@ -168,6 +207,13 @@ def main(argv: list[str] | None = None) -> int:
             "전체 이력" if args.all else "게시물별 최신값",
         )
         return 0 if written > 0 else 1
+    if args.check:
+        try:
+            checks = resolve_check_plan(args.check, args.check_url)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 2
+        return run_doctor(checks, ADAPTER_REGISTRY, headless=not args.headed)
     try:
         targets = resolve_targets(args)
     except (ValueError, FileNotFoundError) as exc:
