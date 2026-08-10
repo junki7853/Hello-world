@@ -21,7 +21,9 @@ from dotenv import load_dotenv
 from crawler.adapters.base import Adapter
 from crawler.adapters.ctrip import CtripAdapter
 from crawler.adapters.dianping import DianpingAdapter
+from crawler.adapters.douyin import DouyinAdapter
 from crawler.adapters.mafengwo import MafengwoAdapter
+from crawler.adapters.xiaohongshu import XiaohongshuAdapter
 from crawler.core.browser import BrowserSession
 from crawler.core.export import export_csv
 from crawler.core.ratelimit import delay_range_from_env, polite_sleep
@@ -36,6 +38,8 @@ ADAPTER_REGISTRY: dict[str, type[Adapter]] = {
     "ctrip": CtripAdapter,
     "mafengwo": MafengwoAdapter,
     "dianping": DianpingAdapter,
+    "xiaohongshu": XiaohongshuAdapter,
+    "douyin": DouyinAdapter,
 }
 
 

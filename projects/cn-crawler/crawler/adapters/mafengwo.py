@@ -22,12 +22,11 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Response
 
-from crawler.adapters.base import Adapter, extract_labeled_counts
+from crawler.adapters.base import Adapter, extract_labeled_counts, navigate_and_settle
 from crawler.core.schema import Metrics
 
 logger = logging.getLogger(__name__)
 
-_NAV_TIMEOUT_MS = 60_000
 _SETTLE_WAIT_MS = 6_000
 
 # /i/24867879.html 또는 쿼리 iid=24867879
@@ -92,9 +91,7 @@ class MafengwoAdapter(Adapter):
 
         with self.session.page(url_for_cookies=url) as page:
             page.on("response", on_response)
-            # 상세는 폴링 때문에 networkidle 에 도달하지 않는다 → 고정 대기
-            page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
-            page.wait_for_timeout(_SETTLE_WAIT_MS)
+            navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             page_title = page.title()
             body_text = self.page_body_text(page)
 

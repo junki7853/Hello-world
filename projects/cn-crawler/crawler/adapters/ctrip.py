@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, Response
 
-from crawler.adapters.base import Adapter
+from crawler.adapters.base import Adapter, navigate_and_settle
 from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,6 @@ _COMMENT_LIST_MARKER = "ruleSortCommentList"
 # 기사 상세 카운트가 담길 법한 응답 마커 (정상 렌더 시 등장)
 _DETAIL_MARKERS = ("articleDetail", "getArticle", "tripshoot", "contentDetail")
 
-_NAV_TIMEOUT_MS = 60_000
 _SELECTOR_TIMEOUT_MS = 8_000
 
 
@@ -55,7 +54,8 @@ class CtripAdapter(Adapter):
 
         with self.session.page(url_for_cookies=url) as page:
             page.on("response", on_response)
-            page.goto(url, wait_until="networkidle", timeout=_NAV_TIMEOUT_MS)
+            # 씨트립은 networkidle 도달이 가능하고 고정 대기 대신 셀렉터 대기를 쓴다
+            navigate_and_settle(page, url, 0, wait_until="networkidle")
             self._wait_for_content(page)
             dom = self._extract_from_dom(page)
             page_title = page.title()

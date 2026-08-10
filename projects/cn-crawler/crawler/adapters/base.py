@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, Response
 
@@ -21,6 +22,11 @@ from crawler.core.browser import BrowserSession
 from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
+
+NAV_TIMEOUT_MS = 60_000
+#: 상세 XHR 본문 캡처 상한. 도우인/샤오홍슈 상세 JSON 은 100K 를 넘어
+#: capture_count_json 의 기본 캡(20K)이면 잘려 파싱 불가라 이 값을 쓴다.
+XHR_BODY_MAX_LEN = 400_000
 
 
 class Adapter(ABC):
@@ -45,8 +51,14 @@ class Adapter(ABC):
 
     # --- 공통 헬퍼 --------------------------------------------------------
 
-    def capture_count_json(self, resp: Response, captured: dict[str, object]) -> None:
-        """카운트 키가 들어있을 법한 JSON XHR 본문을 captured["json_bodies"] 에 모은다."""
+    def capture_count_json(
+        self, resp: Response, captured: dict[str, object], max_len: int = 20_000
+    ) -> None:
+        """카운트 키가 들어있을 법한 JSON XHR 본문을 captured["json_bodies"] 에 모은다.
+
+        max_len 을 넘는 본문은 잘린다 — 잘린 JSON 은 파싱 단계에서 자연히 무시되므로,
+        큰 상세 응답(도우인 detail 등)을 쓰는 어댑터는 max_len 을 키워서 호출한다.
+        """
         if "json" not in resp.headers.get("content-type", ""):
             return
         try:
@@ -57,7 +69,7 @@ class Adapter(ABC):
         if any(key in body for key in self.xhr_count_keys):
             bodies = captured.setdefault("json_bodies", [])
             assert isinstance(bodies, list)
-            bodies.append(body[:20_000])
+            bodies.append(body[:max_len])
 
     def parse_captured_counts(self, captured: dict[str, object]) -> dict[str, int]:
         """모아둔 XHR JSON 들에서 카운트 키를 탐색해 병합한다. 먼저 찾은 값 우선."""
@@ -116,6 +128,87 @@ def find_counts(obj: object, key_map: dict[str, str]) -> dict[str, int]:
         elif isinstance(current, list):
             queue.extend(current)
     return found
+
+
+def navigate_and_settle(
+    page: Page,
+    url: str,
+    settle_ms: int,
+    *,
+    wait_until: str = "domcontentloaded",
+    nav_timeout_ms: int = NAV_TIMEOUT_MS,
+) -> None:
+    """goto 후 고정 대기. 중국 플랫폼 상세는 지속 폴링 때문에 networkidle 에
+    도달하지 않는 경우가 흔해 domcontentloaded + 고정 대기가 기본이다."""
+    page.goto(url, wait_until=wait_until, timeout=nav_timeout_ms)
+    if settle_ms > 0:
+        page.wait_for_timeout(settle_ms)
+
+
+def static_id_from_url(
+    url: str, path_pattern: re.Pattern[str], query_keys: tuple[str, ...]
+) -> str | None:
+    """URL 경로 정규식 → 쿼리 키 순서로 게시물 id 를 찾는다. 없으면 None."""
+    parsed = urlparse(url)
+    match = path_pattern.search(parsed.path)
+    if match:
+        return match.group(1)
+    query = parse_qs(parsed.query)
+    for key in query_keys:
+        values = query.get(key)
+        if values and values[0]:
+            return values[0]
+    return None
+
+
+def is_short_link(url: str, hosts: tuple[str, ...]) -> bool:
+    """공유 단축링크 호스트인지 판정한다 (서브도메인 포함)."""
+    hostname = urlparse(url).hostname or ""
+    return any(
+        hostname == host or hostname.endswith("." + host) for host in hosts
+    )
+
+
+def short_link_code(url: str, prefix: str) -> str:
+    """단축링크가 차단 페이지로 튕겨 id 해석이 불가할 때 단축코드를 식별자로 쓴다."""
+    path = urlparse(url).path.strip("/")
+    if not path:
+        raise ValueError(f"단축링크에서 식별자를 얻을 수 없습니다: {url}")
+    return f"{prefix}{path}"
+
+
+def detect_redirect_away(final_url: str, expected_id: str | None) -> dict[str, bool]:
+    """타깃 id 가 최종 URL 에서 사라졌으면 redirected_away 로 기록한다.
+
+    노트/영상 대신 홈·로그인·다른 게시물로 리다이렉트된 차단 형태(실측) —
+    이때 DOM 값은 엉뚱한 게시물의 지표일 수 있으므로 호출부가 버려야 한다.
+    """
+    if expected_id and expected_id not in final_url:
+        return {"redirected_away": True}
+    return {}
+
+
+def find_subtree_by_id(
+    obj: object, id_keys: tuple[str, ...], target_id: str
+) -> dict | None:
+    """중첩 JSON 에서 id 키가 target_id 와 일치하는 dict 서브트리를 BFS 로 찾는다.
+
+    피드/추천 응답에는 다른 게시물의 카운트도 섞여 있으므로(씨트립 relatedRecommend,
+    도우인 tab/feed 에서 실측), 카운트 탐색 전에 타깃 게시물의 서브트리로 먼저
+    좁힐 때 쓴다. 못 찾으면 None — 호출부는 오염된 값을 쓰지 말고 포기해야 한다.
+    """
+    queue: list[object] = [obj]
+    while queue:
+        current = queue.pop(0)
+        if isinstance(current, dict):
+            for key in id_keys:
+                value = current.get(key)
+                if value is not None and str(value) == target_id:
+                    return current
+            queue.extend(current.values())
+        elif isinstance(current, list):
+            queue.extend(current)
+    return None
 
 
 def extract_labeled_counts(
