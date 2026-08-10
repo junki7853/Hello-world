@@ -44,7 +44,7 @@ class Store:
 
     def __init__(self, db_path: str | Path) -> None:
         path = Path(db_path)
-        if path.parent and str(path.parent) != ".":
+        if str(path.parent) != ".":
             path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row

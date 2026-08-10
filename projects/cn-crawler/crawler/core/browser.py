@@ -9,10 +9,14 @@
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Iterator
+from urllib.parse import urlparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
+
+# 국가코드 TLD 밑에서 흔히 쓰는 2차 접미사 (xxx.com.cn 형태 처리용)
+_SECOND_LEVEL_SUFFIXES = {"com", "net", "org", "gov", "edu", "co"}
 
 # 실제 모바일 브라우저에 가까운 UA (씨트립 m. 페이지는 모바일 뷰)
 _MOBILE_USER_AGENT = (
@@ -30,19 +34,39 @@ window.chrome = window.chrome || {runtime: {}};
 """
 
 
+def _registrable_domain(hostname: str) -> str:
+    """서브도메인 XHR 에도 쿠키가 전송되도록 상위 등록도메인을 최선껏 계산한다.
+
+    'm.ctrip.com' -> '.ctrip.com', 'www.mafengwo.com.cn' -> '.mafengwo.com.cn'.
+    전체 Public Suffix List 없이 보수적 휴리스틱만 쓴다: 판단이 애매하면
+    (라벨 부족·IP 주소) 정확 호스트를 그대로 반환해 과도한 확장을 피한다.
+    """
+    labels = hostname.split(".")
+    if len(labels) < 2 or any(label.isdigit() for label in labels):
+        return hostname  # 단일 라벨(localhost)·IP 등 애매하면 정확 호스트 유지
+    # xxx.com.cn 처럼 2차 접미사 + 2글자 ccTLD 면 마지막 3라벨을 등록도메인으로
+    if len(labels) >= 3 and labels[-2] in _SECOND_LEVEL_SUFFIXES and len(labels[-1]) == 2:
+        base = ".".join(labels[-3:])
+    else:
+        base = ".".join(labels[-2:])
+    return "." + base
+
+
 def _parse_cookie_header(cookie_str: str, url: str) -> list[dict]:
     """"k1=v1; k2=v2" 형태의 쿠키 문자열을 Playwright 쿠키 목록으로 변환한다."""
-    from urllib.parse import urlparse
-
-    domain = urlparse(url).hostname or ""
+    hostname = urlparse(url).hostname or ""
+    domain = _registrable_domain(hostname) if hostname else ""
     cookies = []
     for part in cookie_str.split(";"):
         part = part.strip()
         if not part or "=" not in part:
             continue
         name, value = part.split("=", 1)
+        name = name.strip()
+        if not name:  # "=nokey" 처럼 이름 없는 항목은 건너뛴다
+            continue
         cookies.append(
-            {"name": name.strip(), "value": value.strip(), "domain": domain, "path": "/"}
+            {"name": name, "value": value.strip(), "domain": domain, "path": "/"}
         )
     return cookies
 
@@ -61,28 +85,40 @@ class BrowserSession:
 
     def __enter__(self) -> "BrowserSession":
         self._playwright = sync_playwright().start()
-        launch_kwargs: dict = {"headless": self.headless}
-        proxy = os.environ.get("CRAWLER_PROXY")
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
-        self._browser = self._playwright.chromium.launch(**launch_kwargs)
-        self._context = self._browser.new_context(
-            user_agent=_MOBILE_USER_AGENT,
-            viewport=_MOBILE_VIEWPORT,
-            locale="zh-CN",
-            is_mobile=True,
-            has_touch=True,
-        )
-        self._context.add_init_script(_STEALTH_SCRIPT)
+        try:
+            launch_kwargs: dict = {"headless": self.headless}
+            proxy = os.environ.get("CRAWLER_PROXY")
+            if proxy:
+                launch_kwargs["proxy"] = {"server": proxy}
+            self._browser = self._playwright.chromium.launch(**launch_kwargs)
+            self._context = self._browser.new_context(
+                user_agent=_MOBILE_USER_AGENT,
+                viewport=_MOBILE_VIEWPORT,
+                locale="zh-CN",
+                is_mobile=True,
+                has_touch=True,
+            )
+            self._context.add_init_script(_STEALTH_SCRIPT)
+        except Exception:
+            # 부분 초기화 롤백: 열린 자원을 정리하고 예외를 다시 던진다
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(self, *exc_info: object) -> None:
+        # 앞 단계에서 예외가 나도 뒤 정리가 반드시 실행되도록 각각 격리한다
         if self._context:
-            self._context.close()
+            with suppress(Exception):
+                self._context.close()
+            self._context = None
         if self._browser:
-            self._browser.close()
+            with suppress(Exception):
+                self._browser.close()
+            self._browser = None
         if self._playwright:
-            self._playwright.stop()
+            with suppress(Exception):
+                self._playwright.stop()
+            self._playwright = None
 
     @contextmanager
     def page(self, url_for_cookies: str | None = None) -> Iterator[Page]:

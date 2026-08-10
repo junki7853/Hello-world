@@ -28,6 +28,7 @@ def parse_count(text: str | None) -> int | None:
     """
     if not text:
         return None
+    text = text.replace(",", "")  # 천단위 콤마 제거: "1,024" -> "1024"
     match = _COUNT_PATTERN.search(text)
     if not match:
         return None

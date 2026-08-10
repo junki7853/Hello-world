@@ -16,13 +16,16 @@ from crawler.core.schema import Metrics, parse_count, utc_now_iso
         ("2.5w", 25_000),
         ("1亿", 100_000_000),
         ("赞 1024", 1024),
+        ("1,024", 1024),
+        ("1,234,567", 1_234_567),
         ("", None),
         (None, None),
         ("没有数字", None),
     ],
     ids=[
         "plain", "plain2", "comment-phrase", "wan-decimal", "wan-int",
-        "w-lowercase", "yi", "prefixed", "empty", "none", "no-digits",
+        "w-lowercase", "yi", "prefixed", "thousands-comma", "millions-comma",
+        "empty", "none", "no-digits",
     ],
 )
 def test_parse_count(text, expected):

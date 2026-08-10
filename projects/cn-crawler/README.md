@@ -83,6 +83,8 @@ python -m crawler.cli --url "ctrip=https://m.ctrip.com/webapp/you/community/deta
 
 > 좋아요/저장까지 채우려면 중국 지역 프록시(`CRAWLER_PROXY`) 또는 로그인 쿠키(`CRAWLER_COOKIES`)를 넣고 재수집하면 된다. 코드 변경은 필요 없다.
 
+> ⚠️ DOM 좋아요(赞)/저장(收藏) 셀렉터 매핑(`span.icon-title.icon-right` = 좋아요, 나머지 `span.icon-title` = 저장)은 디자인 피드백 실측에 기반하나, 이 개발 환경은 비중국 IP라 실제 렌더로 검증하지 못했다. **첫 중국 IP 수집 시 두 값이 뒤바뀌지 않았는지 좋아요-저장 교차 검증이 필요하다.**
+
 ## 테스트
 
 ```bash

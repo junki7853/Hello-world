@@ -14,10 +14,11 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from crawler.adapters.base import Adapter
 from crawler.adapters.ctrip import CtripAdapter
 from crawler.core.browser import BrowserSession
-from crawler.core.log import setup_logging
 from crawler.core.ratelimit import delay_range_from_env, polite_sleep
 from crawler.core.store import Store
 
@@ -98,6 +99,10 @@ def collect_targets(
             if adapter_cls is None:
                 logger.warning("지원하지 않는 플랫폼 건너뜀: %s (%s)", platform, url)
                 continue
+            # 첫 요청을 뺀 매 요청 앞에 지연을 둔다. 성공/실패와 무관하게 적용돼
+            # 연속 실패 시에도 간격 없이 재요청해 차단이 악화되는 것을 막는다.
+            if index > 0:
+                polite_sleep(delay_low, delay_high)
             adapter = adapter_cls(session)
             try:
                 metrics = adapter.collect(url)
@@ -115,14 +120,17 @@ def collect_targets(
                 metrics.comments,
                 metrics.views,
             )
-            if index < len(targets) - 1:
-                polite_sleep(delay_low, delay_high)
     return saved
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()  # .env 의 쿠키/프록시/DB 설정을 환경변수로 로드
     args = build_arg_parser().parse_args(argv)
-    setup_logging(verbose=args.verbose)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     try:
         targets = resolve_targets(args)
     except (ValueError, FileNotFoundError) as exc:

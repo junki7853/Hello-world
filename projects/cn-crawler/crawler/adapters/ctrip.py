@@ -119,12 +119,13 @@ class CtripAdapter(Adapter):
         target = _find_dict_with_keys(data, ("likeCount", "collectCount"))
         if target is None:
             return out
+        # commentCount 는 의도적으로 매핑하지 않는다: 댓글 수의 권위값은
+        # comment_list XHR 의 totalCount 이며, detail 이 이를 덮어써선 안 된다.
         for src, dst in (
             ("likeCount", "likes"),
             ("collectCount", "collects"),
             ("readCount", "views"),
             ("viewCount", "views"),
-            ("commentCount", "comments"),
             ("shareCount", "shares"),
         ):
             value = target.get(src)

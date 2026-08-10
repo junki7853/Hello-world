@@ -50,10 +50,11 @@ def test_extract_detail_counts_from_nested_json(adapter):
     assert out["likes"] == 38
     assert out["collects"] == 14
     assert out["views"] == 999
-    assert out["comments"] == 6
     assert out["shares"] == 2
     assert out["title"] == "제주 여행기"
     assert out["author"] == "여행자"
+    # commentCount 는 detail 에서 매핑하지 않는다 (댓글 권위값은 comment_list.totalCount)
+    assert "comments" not in out
 
 
 def test_extract_detail_counts_returns_empty_without_count_keys(adapter):
