@@ -26,7 +26,12 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Response
 
-from crawler.adapters.base import Adapter, extract_labeled_counts, navigate_and_settle
+from crawler.adapters.base import (
+    Adapter,
+    UnsupportedUrlError,
+    extract_labeled_counts,
+    navigate_and_settle,
+)
 from crawler.core.schema import Metrics
 
 logger = logging.getLogger(__name__)
@@ -97,7 +102,7 @@ class DianpingAdapter(Adapter):
             values = query.get(key)
             if values and values[0]:
                 return values[0]
-        raise ValueError(f"URL 에서 디엔핑 게시물/샵 id 를 찾을 수 없습니다: {url}")
+        raise UnsupportedUrlError(f"URL 에서 디엔핑 게시물/샵 id 를 찾을 수 없습니다: {url}")
 
     def collect(self, url: str) -> Metrics:
         article_id = self.parse_article_id(url)

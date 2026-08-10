@@ -36,6 +36,7 @@ from playwright.sync_api import Page, Response
 from crawler.adapters.base import (
     XHR_BODY_MAX_LEN,
     Adapter,
+    UnsupportedUrlError,
     detect_redirect_away,
     find_counts,
     find_subtree_by_id,
@@ -101,7 +102,7 @@ class DouyinAdapter(Adapter):
         """
         aweme_id = _static_aweme_id(url)
         if aweme_id is None:
-            raise ValueError(f"URL 에서 도우인 aweme_id 를 찾을 수 없습니다: {url}")
+            raise UnsupportedUrlError(f"URL 에서 도우인 aweme_id 를 찾을 수 없습니다: {url}")
         return aweme_id
 
     def collect(self, url: str) -> Metrics:
@@ -118,8 +119,11 @@ class DouyinAdapter(Adapter):
                 if _DETAIL_XHR_MARKER in resp.url:
                     self.capture_count_json(resp, captured, max_len=XHR_BODY_MAX_LEN)
                 # 단축링크 해석용: 메인 프레임 내비게이션(302 홉 포함) URL 기록
-                if resp.request.is_navigation_request() and resp.frame == page.main_frame:
-                    nav_urls.append(resp.url)
+                try:
+                    if resp.request.is_navigation_request() and resp.frame == page.main_frame:
+                        nav_urls.append(resp.url)
+                except Exception as exc:  # 응답/프레임이 이미 사라진 경우 등 메타접근 방어
+                    logger.debug("도우인 내비게이션 메타 읽기 실패 %s: %s", resp.url[:80], exc)
 
             page.on("response", on_response)
             navigate_and_settle(page, url, _SETTLE_WAIT_MS)

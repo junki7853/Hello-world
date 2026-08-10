@@ -3,6 +3,7 @@
 import pytest
 
 import crawler.cli as cli
+from crawler.adapters.base import UnsupportedUrlError
 from crawler.cli import (
     build_arg_parser,
     collect_targets,
@@ -84,14 +85,17 @@ class _FakeSession:
 
 
 class _FakeAdapter:
-    """'bad' URL 은 미지원(ValueError), 'boom' 은 예기치 못한 실패, 나머지는 성공."""
+    """'bad' 는 미지원 URL, 'buggy' 는 수집부의 일반 ValueError,
+    'boom' 은 예기치 못한 실패, 나머지는 성공."""
 
     def __init__(self, session):
         pass
 
     def collect(self, url):
         if "bad" in url:
-            raise ValueError(f"URL 에서 id 를 찾을 수 없습니다: {url}")
+            raise UnsupportedUrlError(f"URL 에서 id 를 찾을 수 없습니다: {url}")
+        if "buggy" in url:
+            raise ValueError("본문 파싱부의 예기치 못한 ValueError")
         if "boom" in url:
             raise RuntimeError("navigation crashed")
         return Metrics(platform="fake", article_id="1", url=url)
@@ -100,18 +104,20 @@ class _FakeAdapter:
 def test_collect_targets_one_bad_url_does_not_skip_batch(
     monkeypatch, tmp_path, caplog
 ):
-    """미지원 URL(ValueError)·예기치 못한 실패 모두 경고 후 다음 타깃을 계속한다."""
+    """실패 종류와 무관하게 다음 타깃을 계속하되, 미지원 URL(UnsupportedUrlError)만
+    스택 없는 경고로 구분하고 일반 ValueError 는 수집 실패(스택 경로)로 남긴다."""
     monkeypatch.setenv("CRAWLER_DELAY_MIN", "0")
     monkeypatch.setenv("CRAWLER_DELAY_MAX", "0")
     monkeypatch.setattr(cli, "BrowserSession", _FakeSession)
     monkeypatch.setitem(cli.ADAPTER_REGISTRY, "fake", _FakeAdapter)
     targets = [
         ("fake", "https://x/bad"),
+        ("fake", "https://x/buggy"),
         ("fake", "https://x/boom"),
         ("fake", "https://x/ok"),
     ]
     with caplog.at_level("WARNING"):
         saved = collect_targets(targets, db_path=str(tmp_path / "t.db"), headless=True)
     assert saved == 1
-    assert "지원하지 않는 URL 형식" in caplog.text  # ValueError 는 명확한 경고로
-    assert "수집 실패" in caplog.text  # 그 외 예외는 스택 포함 오류로
+    assert caplog.text.count("지원하지 않는 URL 형식") == 1  # bad 만 미지원으로
+    assert caplog.text.count("수집 실패") == 2  # buggy(일반 ValueError)·boom

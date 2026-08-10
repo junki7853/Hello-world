@@ -29,6 +29,14 @@ NAV_TIMEOUT_MS = 60_000
 XHR_BODY_MAX_LEN = 400_000
 
 
+class UnsupportedUrlError(ValueError):
+    """어댑터가 모르는(파싱 불가한) URL 형식.
+
+    CLI 는 이 예외만 "지원하지 않는 URL" 경고로 건너뛴다 — 수집 로직의
+    예기치 못한 ValueError 버그가 미지원 URL 로 오분류되지 않도록 구분한다.
+    """
+
+
 class Adapter(ABC):
     """플랫폼별 수집기 인터페이스."""
 
@@ -43,7 +51,7 @@ class Adapter(ABC):
 
     @abstractmethod
     def parse_article_id(self, url: str) -> str:
-        """URL 에서 게시물 id 를 파싱한다."""
+        """URL 에서 게시물 id 를 파싱한다. 파싱 불가하면 UnsupportedUrlError."""
 
     @abstractmethod
     def collect(self, url: str) -> Metrics:
@@ -173,7 +181,7 @@ def short_link_code(url: str, prefix: str) -> str:
     """단축링크가 차단 페이지로 튕겨 id 해석이 불가할 때 단축코드를 식별자로 쓴다."""
     path = urlparse(url).path.strip("/")
     if not path:
-        raise ValueError(f"단축링크에서 식별자를 얻을 수 없습니다: {url}")
+        raise UnsupportedUrlError(f"단축링크에서 식별자를 얻을 수 없습니다: {url}")
     return f"{prefix}{path}"
 
 
