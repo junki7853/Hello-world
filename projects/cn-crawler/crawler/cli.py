@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 from crawler.adapters.base import Adapter
 from crawler.adapters.ctrip import CtripAdapter
+from crawler.adapters.dianping import DianpingAdapter
 from crawler.adapters.mafengwo import MafengwoAdapter
 from crawler.core.browser import BrowserSession
 from crawler.core.export import export_csv
@@ -34,6 +35,7 @@ DEFAULT_DB_PATH = "data/crawler.db"
 ADAPTER_REGISTRY: dict[str, type[Adapter]] = {
     "ctrip": CtripAdapter,
     "mafengwo": MafengwoAdapter,
+    "dianping": DianpingAdapter,
 }
 
 
