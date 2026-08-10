@@ -71,6 +71,8 @@ python -m crawler.cli --url "douyin=https://www.douyin.com/video/766195890773200
 # 옵션: --db data/crawler.db, --headed(창 띄우기), -v(디버그 로그)
 ```
 
+배치 견고성: 어댑터가 모르는 URL 형식(진짜 미지원)은 경고 한 줄로 건너뛰고 나머지 타깃은 계속 수집한다. 지원 URL 인데 차단(로그인월/캡차/verify)에 막히면 행을 건너뛰지 않고 지표 `None` + `raw` 진단의 degrade 행을 남긴다.
+
 ### CSV export (마케팅 트래킹 시트용)
 
 ```bash
@@ -115,7 +117,7 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 
 ## 마펑워 어댑터 — 정찰 결과
 
-예시 URL: `https://www.mafengwo.cn/i/<id>.html` (게시물 id 는 경로에서, `iid` 쿼리도 지원).
+예시 URL: `https://www.mafengwo.cn/i/<id>.html` (게시물 id 는 경로에서, `iid` 쿼리도 지원), `https://m.mafengwo.cn/mweng/wengdetailssr/weng?id=<id>` (모바일 웽 상세 — `id` 쿼리는 무관 URL 오수용을 막기 위해 weng 경로에서만 인정).
 
 정찰 스파이크에서 관찰한 사실 (2026-08, 헤드리스·비중국 IP·비로그인 기준):
 
@@ -126,9 +128,11 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 
 어댑터 동작: 캡차(`t.captcha.qq.com`) 감지 시 지표를 `None` 으로 두고 `raw` 에 `captcha_detected` 진단을 남긴다. 정상 렌더 환경(중국 IP·유효 쿠키)에서는 **본문 텍스트 정규식**(浏览/顶/收藏/蜂评, 발표일 → `upload_date`) + **XHR JSON 카운트 키 탐색**(vote_num/reply_num 등)을 병합한다. 셀렉터 대신 텍스트 패턴을 써서 마크업 변경에 상대적으로 강하다.
 
+**모바일 웽 상세는 예외적으로 캡차 없이 렌더된다** (2026-08 실측, 비중국 IP). 다만 지표 숫자에 라벨이 없어(하단 액션바 아이콘 옆 맨숫자) 텍스트 패턴으로 못 잡고, 각 버튼의 `data-exp-display-params` JSON 의 `item_name`(点赞/评论/收藏)으로 숫자의 의미를 판정해 수집한다 — 공개 예시 실수집으로 likes/collects 실값 확인. 삭제된 게시물은 "笔记不存在" 본문으로 렌더되며 degrade 행이 남는다.
+
 ## 디엔핑 어댑터 — 정찰 결과
 
-예시 URL: `https://m.dianping.com/ugcdetail/<contentId>` (노트), `https://www.dianping.com/shop/<id>` (샵).
+예시 URL: `https://m.dianping.com/ugcdetail/<contentId>` (노트), `https://m.dianping.com/feeddetail/<id>` (피드 상세 — 같은 숫자 id 체계, SMS 로그인월로 리다이렉트되어 degrade 행이 남는다), `https://www.dianping.com/shop/<id>` (샵).
 
 정찰 스파이크에서 관찰한 사실 (2026-08, 헤드리스·비중국 IP·비로그인 기준):
 
@@ -150,7 +154,9 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 
 ## 도우인 어댑터 — 정찰 결과
 
-예시 URL: `https://www.douyin.com/video/<aweme_id>` (15~20자리 숫자), `/note/<id>`(이미지 게시물), `v.douyin.com` 공유 단축링크(리다이렉트 후 자동 해석).
+예시 URL: `https://www.douyin.com/video/<aweme_id>` (15~20자리 숫자), `/note/<id>`(이미지 게시물), `?modal_id=<aweme_id>` 쿼리형, `v.douyin.com` 공유 단축링크(자동 해석 — 아래 참조).
+
+**단축링크 해석** (2026-08 실측): `v.douyin.com/<code>` 는 302 체인 `v.douyin.com → www.iesdouyin.com/share/video/<aweme_id>/ → www.douyin.com/video/<aweme_id>` 로 풀린다. 어댑터는 최종 URL 뿐 아니라 **메인 프레임 내비게이션 체인(302 홉 포함) 전체**에서 `aweme_id` 를 재해석하므로 최종 랜딩이 홈/verify 로 튕겨도 중간 홉에서 id 를 복원한다. 랜딩이 공유월이라 detail XHR 이 안 뜨면 표준 상세(`/video/<id>`)로 재진입해 동일하게 수집한다(`raw` 에 `short_resolved`/`renavigated` 진단). 공개 예시 단축링크 실수집으로 실값 확인.
 
 정찰 스파이크에서 관찰한 사실 (2026-08, 헤드리스·비중국 IP·비로그인, 데스크톱 뷰 기준):
 
