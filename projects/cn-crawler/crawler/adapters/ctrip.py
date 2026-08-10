@@ -52,7 +52,7 @@ class CtripAdapter(Adapter):
         def on_response(resp: Response) -> None:
             self._capture_xhr(resp, article_id, captured)
 
-        with self.session.page(url_for_cookies=url) as page:
+        with self.session.page(url_for_cookies=url, platform=self.platform) as page:
             page.on("response", on_response)
             # 씨트립은 networkidle 도달이 가능하고 고정 대기 대신 셀렉터 대기를 쓴다
             navigate_and_settle(page, url, 0, wait_until="networkidle")

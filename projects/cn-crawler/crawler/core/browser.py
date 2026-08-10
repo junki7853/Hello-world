@@ -4,14 +4,18 @@
 플랫폼 서명 알고리즘은 리버싱하지 않고 브라우저가 대신 계산하게 둔다.
 
 가벼운 stealth 기본값(자동화 탐지 완화)과 쿠키/프록시 주입을 담당한다.
+쿠키는 플랫폼별(플랫폼 env·쿠키 디렉터리) → 전역 순으로 고르고, 로그인 세션
+전체를 담은 Playwright storage_state(json) 도 받는다.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from contextlib import contextmanager, suppress
+from pathlib import Path
 from typing import Iterator
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
@@ -31,6 +35,21 @@ _DESKTOP_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 _DESKTOP_VIEWPORT = {"width": 1440, "height": 900}
+
+# 컨텍스트 생성 인자 — 모바일/데스크톱 두 뷰. 전용(storage_state) 컨텍스트도
+# 같은 인자를 재사용해 UA/뷰포트 일관성을 지킨다.
+_MOBILE_CONTEXT_KWARGS: dict = {
+    "user_agent": _MOBILE_USER_AGENT,
+    "viewport": _MOBILE_VIEWPORT,
+    "locale": "zh-CN",
+    "is_mobile": True,
+    "has_touch": True,
+}
+_DESKTOP_CONTEXT_KWARGS: dict = {
+    "user_agent": _DESKTOP_USER_AGENT,
+    "viewport": _DESKTOP_VIEWPORT,
+    "locale": "zh-CN",
+}
 
 # navigator.webdriver 등 흔한 자동화 신호를 지우는 최소 stealth 스크립트.
 # platform 은 UA 와 모순되면 오히려 봇 신호가 된다 → 컨텍스트별로 맞춘다
@@ -87,10 +106,78 @@ def _parse_cookie_header(cookie_str: str, url: str) -> list[dict]:
     return cookies
 
 
+def resolve_cookie_source(
+    platform: str | None, environ: Mapping[str, str] | None = None
+) -> tuple[str, str] | None:
+    """플랫폼 쿠키 소스를 우선순위대로 찾는다.
+
+    우선순위: CRAWLER_COOKIES_<PLATFORM>(헤더 문자열) > <DIR>/<platform>.json
+    (Playwright storage_state 파일) > <DIR>/<platform>.txt(헤더 문자열) >
+    CRAWLER_COOKIES(전역 헤더, 하위호환). <DIR> 은 CRAWLER_COOKIES_DIR.
+
+    반환값: ("header", 쿠키헤더문자열) | ("storage_state", json파일경로) | None.
+    브라우저 없이 순수 계산이라 유닛 테스트로 우선순위를 검증한다.
+    """
+    env = os.environ if environ is None else environ
+    if platform:
+        env_val = env.get(f"CRAWLER_COOKIES_{platform.upper()}")
+        if env_val:
+            return ("header", env_val)
+        cookie_dir = env.get("CRAWLER_COOKIES_DIR")
+        if cookie_dir:
+            base = Path(cookie_dir)
+            json_path = base / f"{platform}.json"
+            if json_path.is_file():
+                return ("storage_state", str(json_path))
+            txt_path = base / f"{platform}.txt"
+            if txt_path.is_file():
+                text = txt_path.read_text(encoding="utf-8").strip()
+                if text:
+                    return ("header", text)
+    global_val = env.get("CRAWLER_COOKIES")
+    if global_val:
+        return ("header", global_val)
+    return None
+
+
+def build_proxy_config(environ: Mapping[str, str] | None = None) -> dict | None:
+    """CRAWLER_PROXY(+선택 인증)를 Playwright proxy 딕셔너리로 만든다.
+
+    server 는 http://host:port 형태로 정규화한다(인증정보는 server 에서 떼어낸다 —
+    Playwright 는 username/password 를 별도 키로 받는다). 인증은 URL 임베드
+    (http://user:pass@host:port) 또는 별도 CRAWLER_PROXY_USERNAME/PASSWORD 로 주며,
+    별도 지정이 URL 임베드보다 우선한다. 인증 없는 server-only 형태도 그대로 동작.
+    프록시 미설정이면 None.
+    """
+    env = os.environ if environ is None else environ
+    server = env.get("CRAWLER_PROXY")
+    if not server:
+        return None
+    parsed = urlparse(server)
+    embedded_user = parsed.username
+    embedded_pass = parsed.password
+    if parsed.hostname and (embedded_user or embedded_pass):
+        netloc = parsed.hostname
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        server = urlunparse(
+            (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+        )
+    username = env.get("CRAWLER_PROXY_USERNAME") or embedded_user
+    password = env.get("CRAWLER_PROXY_PASSWORD") or embedded_pass
+    config: dict = {"server": server}
+    if username:
+        config["username"] = username
+    if password:
+        config["password"] = password
+    return config
+
+
 class BrowserSession:
     """페이지를 열어주는 얇은 컨텍스트 매니저.
 
-    쿠키/프록시는 환경변수(CRAWLER_COOKIES, CRAWLER_PROXY)에서 읽는다.
+    쿠키/프록시는 환경변수에서 읽는다: 프록시는 CRAWLER_PROXY(+인증), 쿠키는
+    플랫폼별(CRAWLER_COOKIES_<PLATFORM>·CRAWLER_COOKIES_DIR) → 전역 CRAWLER_COOKIES.
     """
 
     def __init__(self, headless: bool = True) -> None:
@@ -99,22 +186,18 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._desktop_context: BrowserContext | None = None
+        # (platform, desktop) → storage_state 로 시드된 전용 컨텍스트
+        self._storage_contexts: dict[tuple[str, bool], BrowserContext] = {}
 
     def __enter__(self) -> "BrowserSession":
         self._playwright = sync_playwright().start()
         try:
             launch_kwargs: dict = {"headless": self.headless}
-            proxy = os.environ.get("CRAWLER_PROXY")
+            proxy = build_proxy_config()
             if proxy:
-                launch_kwargs["proxy"] = {"server": proxy}
+                launch_kwargs["proxy"] = proxy
             self._browser = self._playwright.chromium.launch(**launch_kwargs)
-            self._context = self._browser.new_context(
-                user_agent=_MOBILE_USER_AGENT,
-                viewport=_MOBILE_VIEWPORT,
-                locale="zh-CN",
-                is_mobile=True,
-                has_touch=True,
-            )
+            self._context = self._browser.new_context(**_MOBILE_CONTEXT_KWARGS)
             self._context.add_init_script(_STEALTH_SCRIPT)
         except Exception:
             # 부분 초기화 롤백: 열린 자원을 정리하고 예외를 다시 던진다
@@ -124,6 +207,10 @@ class BrowserSession:
 
     def __exit__(self, *exc_info: object) -> None:
         # 앞 단계에서 예외가 나도 뒤 정리가 반드시 실행되도록 각각 격리한다
+        for context in self._storage_contexts.values():
+            with suppress(Exception):
+                context.close()
+        self._storage_contexts = {}
         if self._desktop_context:
             with suppress(Exception):
                 self._desktop_context.close()
@@ -145,28 +232,57 @@ class BrowserSession:
         """데스크톱 뷰 컨텍스트를 첫 사용 시 만들어 재사용한다."""
         if self._desktop_context is None:
             assert self._browser is not None
-            self._desktop_context = self._browser.new_context(
-                user_agent=_DESKTOP_USER_AGENT,
-                viewport=_DESKTOP_VIEWPORT,
-                locale="zh-CN",
-            )
+            self._desktop_context = self._browser.new_context(**_DESKTOP_CONTEXT_KWARGS)
             self._desktop_context.add_init_script(_DESKTOP_STEALTH_SCRIPT)
         return self._desktop_context
 
+    def _get_storage_state_context(
+        self, platform: str, desktop: bool, storage_state_path: str
+    ) -> BrowserContext:
+        """플랫폼 storage_state 로 로그인 세션을 담은 전용 컨텍스트(캐시)를 만든다.
+
+        storage_state 는 쿠키+localStorage 를 함께 담으므로 공유 컨텍스트에
+        add_cookies 로 섞지 않고 (platform, desktop)별 전용 컨텍스트를 쓴다.
+        """
+        key = (platform, desktop)
+        context = self._storage_contexts.get(key)
+        if context is None:
+            assert self._browser is not None
+            kwargs = _DESKTOP_CONTEXT_KWARGS if desktop else _MOBILE_CONTEXT_KWARGS
+            context = self._browser.new_context(
+                storage_state=storage_state_path, **kwargs
+            )
+            context.add_init_script(
+                _DESKTOP_STEALTH_SCRIPT if desktop else _STEALTH_SCRIPT
+            )
+            self._storage_contexts[key] = context
+        return context
+
     @contextmanager
     def page(
-        self, url_for_cookies: str | None = None, desktop: bool = False
+        self,
+        url_for_cookies: str | None = None,
+        desktop: bool = False,
+        platform: str | None = None,
     ) -> Iterator[Page]:
-        """새 페이지를 연다. 쿠키가 설정돼 있으면 해당 URL 도메인에 주입한다.
+        """새 페이지를 연다. 플랫폼/전역 쿠키가 설정돼 있으면 주입한다.
 
+        쿠키 소스는 resolve_cookie_source 우선순위(플랫폼별 > 전역)를 따른다.
+        storage_state(json)면 로그인 세션 전체를 담은 전용 컨텍스트를 쓰고,
+        헤더 문자열이면 기존처럼 URL 도메인에 스코핑해 주입한다.
         desktop=True 면 데스크톱 UA/뷰포트 컨텍스트를 쓴다 (도우인·샤오홍슈 웹).
+        platform 미지정이면 전역 CRAWLER_COOKIES 만 적용 — 기존 호출과 호환된다.
         """
         if self._context is None:
             raise RuntimeError("BrowserSession must be used as a context manager")
-        context = self._get_desktop_context() if desktop else self._context
-        cookie_str = os.environ.get("CRAWLER_COOKIES")
-        if cookie_str and url_for_cookies:
-            context.add_cookies(_parse_cookie_header(cookie_str, url_for_cookies))
+        source = resolve_cookie_source(platform)
+        if source is not None and source[0] == "storage_state":
+            assert platform is not None  # storage_state 는 platform 경로에서만 나온다
+            context = self._get_storage_state_context(platform, desktop, source[1])
+        else:
+            context = self._get_desktop_context() if desktop else self._context
+            if source is not None and url_for_cookies:
+                context.add_cookies(_parse_cookie_header(source[1], url_for_cookies))
         page = context.new_page()
         try:
             yield page

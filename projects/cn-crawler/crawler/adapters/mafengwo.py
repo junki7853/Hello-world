@@ -106,7 +106,7 @@ class MafengwoAdapter(Adapter):
                 return
             self.capture_count_json(resp, captured)
 
-        with self.session.page(url_for_cookies=url) as page:
+        with self.session.page(url_for_cookies=url, platform=self.platform) as page:
             page.on("response", on_response)
             navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             page_title = page.title()

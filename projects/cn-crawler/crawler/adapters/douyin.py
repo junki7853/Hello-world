@@ -112,7 +112,9 @@ class DouyinAdapter(Adapter):
         nav_urls: list[str] = []
         diag: dict[str, object] = {}
 
-        with self.session.page(url_for_cookies=url, desktop=True) as page:
+        with self.session.page(
+            url_for_cookies=url, desktop=True, platform=self.platform
+        ) as page:
 
             def on_response(resp: Response) -> None:
                 # 플랫폼 고유부: detail XHR 만 수집 (피드/시리즈 응답 오염 차단)
