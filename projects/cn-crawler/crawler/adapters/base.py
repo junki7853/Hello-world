@@ -45,8 +45,14 @@ class Adapter(ABC):
 
     # --- 공통 헬퍼 --------------------------------------------------------
 
-    def capture_count_json(self, resp: Response, captured: dict[str, object]) -> None:
-        """카운트 키가 들어있을 법한 JSON XHR 본문을 captured["json_bodies"] 에 모은다."""
+    def capture_count_json(
+        self, resp: Response, captured: dict[str, object], max_len: int = 20_000
+    ) -> None:
+        """카운트 키가 들어있을 법한 JSON XHR 본문을 captured["json_bodies"] 에 모은다.
+
+        max_len 을 넘는 본문은 잘린다 — 잘린 JSON 은 파싱 단계에서 자연히 무시되므로,
+        큰 상세 응답(도우인 detail 등)을 쓰는 어댑터는 max_len 을 키워서 호출한다.
+        """
         if "json" not in resp.headers.get("content-type", ""):
             return
         try:
@@ -57,7 +63,7 @@ class Adapter(ABC):
         if any(key in body for key in self.xhr_count_keys):
             bodies = captured.setdefault("json_bodies", [])
             assert isinstance(bodies, list)
-            bodies.append(body[:20_000])
+            bodies.append(body[:max_len])
 
     def parse_captured_counts(self, captured: dict[str, object]) -> dict[str, int]:
         """모아둔 XHR JSON 들에서 카운트 키를 탐색해 병합한다. 먼저 찾은 값 우선."""
@@ -116,6 +122,29 @@ def find_counts(obj: object, key_map: dict[str, str]) -> dict[str, int]:
         elif isinstance(current, list):
             queue.extend(current)
     return found
+
+
+def find_subtree_by_id(
+    obj: object, id_keys: tuple[str, ...], target_id: str
+) -> dict | None:
+    """중첩 JSON 에서 id 키가 target_id 와 일치하는 dict 서브트리를 BFS 로 찾는다.
+
+    피드/추천 응답에는 다른 게시물의 카운트도 섞여 있으므로(씨트립 relatedRecommend,
+    도우인 tab/feed 에서 실측), 카운트 탐색 전에 타깃 게시물의 서브트리로 먼저
+    좁힐 때 쓴다. 못 찾으면 None — 호출부는 오염된 값을 쓰지 말고 포기해야 한다.
+    """
+    queue: list[object] = [obj]
+    while queue:
+        current = queue.pop(0)
+        if isinstance(current, dict):
+            for key in id_keys:
+                value = current.get(key)
+                if value is not None and str(value) == target_id:
+                    return current
+            queue.extend(current.values())
+        elif isinstance(current, list):
+            queue.extend(current)
+    return None
 
 
 def extract_labeled_counts(

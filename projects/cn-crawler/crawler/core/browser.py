@@ -25,6 +25,13 @@ _MOBILE_USER_AGENT = (
 )
 _MOBILE_VIEWPORT = {"width": 390, "height": 844}
 
+# 데스크톱 UA (도우인·샤오홍슈 웹은 데스크톱 뷰가 표준 — 모바일 UA 는 앱 유도월로 빠진다)
+_DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+_DESKTOP_VIEWPORT = {"width": 1440, "height": 900}
+
 # navigator.webdriver 등 흔한 자동화 신호를 지우는 최소 stealth 스크립트
 _STEALTH_SCRIPT = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -82,6 +89,7 @@ class BrowserSession:
         self._playwright = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
+        self._desktop_context: BrowserContext | None = None
 
     def __enter__(self) -> "BrowserSession":
         self._playwright = sync_playwright().start()
@@ -107,6 +115,10 @@ class BrowserSession:
 
     def __exit__(self, *exc_info: object) -> None:
         # 앞 단계에서 예외가 나도 뒤 정리가 반드시 실행되도록 각각 격리한다
+        if self._desktop_context:
+            with suppress(Exception):
+                self._desktop_context.close()
+            self._desktop_context = None
         if self._context:
             with suppress(Exception):
                 self._context.close()
@@ -120,15 +132,33 @@ class BrowserSession:
                 self._playwright.stop()
             self._playwright = None
 
+    def _get_desktop_context(self) -> BrowserContext:
+        """데스크톱 뷰 컨텍스트를 첫 사용 시 만들어 재사용한다."""
+        if self._desktop_context is None:
+            assert self._browser is not None
+            self._desktop_context = self._browser.new_context(
+                user_agent=_DESKTOP_USER_AGENT,
+                viewport=_DESKTOP_VIEWPORT,
+                locale="zh-CN",
+            )
+            self._desktop_context.add_init_script(_STEALTH_SCRIPT)
+        return self._desktop_context
+
     @contextmanager
-    def page(self, url_for_cookies: str | None = None) -> Iterator[Page]:
-        """새 페이지를 연다. 쿠키가 설정돼 있으면 해당 URL 도메인에 주입한다."""
+    def page(
+        self, url_for_cookies: str | None = None, desktop: bool = False
+    ) -> Iterator[Page]:
+        """새 페이지를 연다. 쿠키가 설정돼 있으면 해당 URL 도메인에 주입한다.
+
+        desktop=True 면 데스크톱 UA/뷰포트 컨텍스트를 쓴다 (도우인·샤오홍슈 웹).
+        """
         if self._context is None:
             raise RuntimeError("BrowserSession must be used as a context manager")
+        context = self._get_desktop_context() if desktop else self._context
         cookie_str = os.environ.get("CRAWLER_COOKIES")
         if cookie_str and url_for_cookies:
-            self._context.add_cookies(_parse_cookie_header(cookie_str, url_for_cookies))
-        page = self._context.new_page()
+            context.add_cookies(_parse_cookie_header(cookie_str, url_for_cookies))
+        page = context.new_page()
         try:
             yield page
         finally:
