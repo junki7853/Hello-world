@@ -1,6 +1,7 @@
 """마펑워 어댑터 파싱 로직 스모크 테스트 (브라우저 없이 가짜 픽스처로)."""
 
 import json
+from contextlib import contextmanager
 
 import pytest
 
@@ -41,6 +42,101 @@ def test_query_id_only_accepted_on_weng_path():
     adapter = MafengwoAdapter.__new__(MafengwoAdapter)
     with pytest.raises(ValueError):
         adapter.parse_article_id("https://www.mafengwo.cn/search?id=123")
+
+
+# --- 웽 액션바 (라벨 없는 숫자 → item_name 매핑) -----------------------------
+
+class _FakeButton:
+    def __init__(self, params, text):
+        self._params = params
+        self._text = text
+
+    def get_attribute(self, name):
+        return self._params
+
+    def inner_text(self):
+        return self._text
+
+
+def _btn(item_name, text):
+    return _FakeButton(json.dumps({"item_name": item_name}), text)
+
+
+class _FakeWengPage:
+    """collect 가 쓰는 Page 표면만 흉내낸다 (브라우저 없음)."""
+
+    def __init__(self, body, buttons, url):
+        self.url = url
+        self._body = body
+        self._buttons = buttons
+
+    def on(self, event, handler):
+        pass
+
+    def goto(self, url, wait_until=None, timeout=None):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def title(self):
+        return "여행노트-마펑워"
+
+    def inner_text(self, selector):
+        return self._body
+
+    def query_selector_all(self, selector):
+        return self._buttons
+
+
+class _FakeSession:
+    def __init__(self, page):
+        self._page = page
+
+    @contextmanager
+    def page(self, url_for_cookies=None, desktop=False):
+        yield self._page
+
+
+def test_weng_action_bar_maps_item_names_to_fields():
+    page = _FakeWengPage(
+        "", [_btn("点赞", "24"), _btn("评论", "3"), _btn("收藏", "1.2万")], ""
+    )
+    assert MafengwoAdapter._read_weng_action_bar(page) == {
+        "likes": 24,
+        "comments": 3,
+        "collects": 12000,
+    }
+
+
+def test_weng_action_bar_skips_broken_buttons():
+    """속성 없음·JSON 깨짐·모르는 item_name·숫자 없음은 건너뛰고, 중복은 첫 값 유지."""
+    page = _FakeWengPage(
+        "",
+        [
+            _FakeButton(None, "24"),  # data-exp-display-params 없음
+            _FakeButton("{not json", "10"),  # JSON 깨짐
+            _btn("分享", "7"),  # 매핑에 없는 item_name
+            _btn("点赞", "点赞"),  # 숫자 없는 텍스트
+            _btn("点赞", "24"),
+            _btn("点赞", "99"),  # 중복 버튼 — setdefault 로 첫 값 유지
+        ],
+        "",
+    )
+    assert MafengwoAdapter._read_weng_action_bar(page) == {"likes": 24}
+
+
+def test_collect_weng_counts_fill_gaps_but_do_not_override_text():
+    """액션바 값은 본문 텍스트/XHR 이 못 채운 지표만 보충한다 (setdefault 병합)."""
+    url = "https://m.mafengwo.cn/mweng/wengdetailssr/weng?id=42"
+    body = "浏览 100 · 顶 38\n发表于 2026-08-01"
+    page = _FakeWengPage(body, [_btn("点赞", "999"), _btn("评论", "3")], url)
+    metrics = MafengwoAdapter(_FakeSession(page)).collect(url)
+    assert metrics.article_id == "42"
+    assert metrics.likes == 38  # 본문 텍스트 값 유지 — 액션바 999 로 덮지 않는다
+    assert metrics.views == 100
+    assert metrics.comments == 3  # 텍스트에 없던 지표만 액션바로 보충
+    assert metrics.upload_date == "2026-08-01"
 
 
 # --- DOM 텍스트 정규식 추출 -------------------------------------------------
