@@ -112,7 +112,9 @@ class XiaohongshuAdapter(Adapter):
         def on_response(resp: Response) -> None:
             self.capture_count_json(resp, captured, max_len=XHR_BODY_MAX_LEN)
 
-        with self.session.page(url_for_cookies=url, desktop=True) as page:
+        with self.session.page(
+            url_for_cookies=url, desktop=True, platform=self.platform
+        ) as page:
             page.on("response", on_response)
             navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             final_url = page.url

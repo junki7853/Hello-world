@@ -94,7 +94,7 @@ class _FakeSession:
         self._page = page
 
     @contextmanager
-    def page(self, url_for_cookies=None, desktop=False):
+    def page(self, url_for_cookies=None, desktop=False, platform=None):
         yield self._page
 
 

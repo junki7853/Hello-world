@@ -88,16 +88,37 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 
 컬럼 순서: `platform, article_id, url, author, post_format, upload_date, followers, impressions, views, likes, collects, comments, shares, collected_at`. 엑셀에서 한글이 깨지지 않도록 **UTF-8-BOM** 으로 저장된다. 값이 없는 지표는 빈 칸.
 
+### 쿠키/프록시 진단 (`--check`)
+
+전량 수집 전에 쿠키·프록시가 실제로 로그인월/캡차를 뚫는지 판정한다(지표는 저장하지 않고 상태만 리포트).
+
+```bash
+# 전체 플랫폼 (URL 을 준 플랫폼만 실제 검사)
+python -m crawler.cli --check all \
+  --check-url douyin=https://www.douyin.com/video/<id> \
+  --check-url xiaohongshu=https://www.xiaohongshu.com/explore/<id>?xsec_token=...
+
+# 한 플랫폼만
+python -m crawler.cli --check dianping --check-url dianping=https://m.dianping.com/ugcdetail/<id>
+```
+
+상태: `OK` / `LOGIN_WALL` / `CAPTCHA_WALL` / `APP_WALL` / `REDIRECTED` / `NO_DATA` / `NO_URL`. 모두 `OK` 면 종료코드 0, 아니면 1. 설정 절차는 **[SETUP-COOKIES.md](SETUP-COOKIES.md)** 참고.
+
 ## 설정 (환경변수)
 
-`.env.example` 를 `.env` 로 복사해 채운다 (`.env` 는 gitignore). 로그인이 필요 없으면 전부 비워도 된다.
+`.env.example` 를 `.env` 로 복사해 채운다 (`.env`·쿠키파일·storage_state 는 gitignore). 로그인이 필요 없으면 전부 비워도 된다. 쿠키·세션·프록시 추출 절차는 **[SETUP-COOKIES.md](SETUP-COOKIES.md)** 에 정리했다.
 
 | 변수 | 설명 |
 |------|------|
-| `CRAWLER_COOKIES` | 로그인 페이지용 쿠키 문자열 `"k1=v1; k2=v2"` |
-| `CRAWLER_PROXY` | 프록시 `http://user:pass@host:port` (중국 지역 IP 필요 시) |
+| `CRAWLER_PROXY` | 프록시 `http://host:port` 또는 `http://user:pass@host:port` (중국 지역 IP 필요 시) |
+| `CRAWLER_PROXY_USERNAME` / `CRAWLER_PROXY_PASSWORD` | 프록시 인증 분리 지정 (URL 임베드보다 우선) |
+| `CRAWLER_COOKIES` | 전역 쿠키 헤더 문자열 `"k1=v1; k2=v2"` (플랫폼별 설정 없을 때 폴백) |
+| `CRAWLER_COOKIES_<PLATFORM>` | 플랫폼별 쿠키 헤더 (전역보다 우선). 예: `CRAWLER_COOKIES_XIAOHONGSHU` |
+| `CRAWLER_COOKIES_DIR` | 쿠키 파일 디렉터리. `<platform>.json`(storage_state)·`<platform>.txt`(헤더) |
 | `CRAWLER_DB` | SQLite 경로 (기본 `data/crawler.db`) |
 | `CRAWLER_DELAY_MIN` / `CRAWLER_DELAY_MAX` | 요청 간 지연 범위(초, 기본 3~8) |
+
+쿠키 소스 우선순위: `CRAWLER_COOKIES_<PLATFORM>` > `$CRAWLER_COOKIES_DIR/<platform>.json` > `$CRAWLER_COOKIES_DIR/<platform>.txt` > `CRAWLER_COOKIES`(전역).
 
 ## 씨트립 어댑터 — 정찰 결과
 
@@ -178,24 +199,24 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 | 샤오홍슈 | 로그인월/보안월 차단 | 중국 IP + 로그인 쿠키 + `xsec_token` 공유링크 |
 | 도우인 | **전 지표 실값** (재생수 제외) | — (현 환경으로 충분) |
 
-**프록시/쿠키 주입 지점** (코드 변경 불필요):
+**프록시/쿠키 주입 지점** (코드 변경 불필요 — 자세한 절차는 [SETUP-COOKIES.md](SETUP-COOKIES.md)):
 
-- `CRAWLER_PROXY` — 중국 지역 프록시 (`crawler/core/browser.py` 가 Playwright launch 에 전달)
-- `CRAWLER_COOKIES` — 로그인 쿠키 문자열 (타깃 URL 의 등록도메인으로 자동 스코핑되어 XHR 에도 전송)
+- `CRAWLER_PROXY`(+`_USERNAME`/`_PASSWORD`) — 중국 지역 프록시. 인증은 URL 임베드(`user:pass@`) 또는 분리 env (`crawler/core/browser.py` 의 `build_proxy_config` 가 Playwright launch 에 전달).
+- `CRAWLER_COOKIES_<PLATFORM>` / `CRAWLER_COOKIES_DIR` — 플랫폼별 로그인 쿠키(헤더 문자열) 또는 storage_state(쿠키+localStorage 세션 통째). 전역 `CRAWLER_COOKIES` 보다 우선하며, 헤더는 타깃 URL 등록도메인으로 자동 스코핑되고 storage_state 는 플랫폼 전용 컨텍스트로 주입된다.
 
-둘 다 `.env` 로 관리하며, 주입 후 같은 CLI 명령을 재실행하면 된다. 어댑터의 DOM/XHR 병합 경로는 정상 렌더 환경을 전제로 이미 구현돼 있다.
+`.env` 로 관리하며, 주입 후 `--check` 로 유효성을 확인한 뒤 같은 CLI 명령을 재실행하면 된다. 어댑터의 DOM/XHR 병합 경로는 정상 렌더 환경을 전제로 이미 구현돼 있다.
 
 ## 테스트
 
 ```bash
-python -m pytest        # 브라우저 없이 되는 로직 (스키마·저장·export·CLI·어댑터 파싱) 130건
+python -m pytest        # 브라우저 없이 되는 로직 (스키마·저장·export·CLI·어댑터 파싱·쿠키/프록시·doctor) 176건
 ```
 
 브라우저가 필요한 실수집(navigate/DOM)은 스모크 테스트에서 제외한다.
 
 ## 다음 Phase 확장 지점
 
-- **중국 IP/쿠키 실렌더 검증**: 프록시·쿠키 확보 시 씨트립 좋아요-저장 교차 검증, 마펑워/디엔핑/샤오홍슈 DOM 경로 실렌더 검증 (위 운영 노트의 주입 지점 사용).
+- **중국 IP/쿠키 실렌더 검증**: 프록시·쿠키 확보 시 씨트립 좋아요-저장 교차 검증, 마펑워/디엔핑/샤오홍슈 DOM 경로 실렌더 검증. 인프라(플랫폼별 쿠키·storage_state·프록시 인증·`--check` 진단)는 Phase 5 에서 준비됨 — 절차는 [SETUP-COOKIES.md](SETUP-COOKIES.md).
 - **디엔핑 폰트 난독화 디코드**: 로그인 쿠키·중국 IP 로 실제 렌더가 확보되면, `font_obfuscation_detected` 가 참인 페이지에서 `@font-face` 폰트를 받아 글리프→숫자 맵을 만들거나 숫자 영역 스크린샷+OCR 을 붙인다 (진입점: `adapters/dianping.py` 의 `extract_metrics_from_text`).
 - **도우인 재생수**: 웹 API 는 `play_count` 를 숨기므로, 크리에이터 계정 쿠키로 크리에이터 센터 API 를 읽는 별도 경로가 필요하다.
 

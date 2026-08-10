@@ -4,6 +4,21 @@ data/
 *.db
 targets.csv
 
+# 로그인 쿠키/세션 (플랫폼별) — 실제 쿠키·세션은 절대 커밋 금지.
+# 권장 위치인 cookies/ 전체 + 실제 파일명(<platform>.json/.txt)을 위치 무관하게 무시한다
+# (CRAWLER_COOKIES_DIR 을 저장소 안 다른 경로로 잡아도 세션이 새지 않도록).
+cookies/
+xiaohongshu.json
+xiaohongshu.txt
+dianping.json
+dianping.txt
+douyin.json
+douyin.txt
+ctrip.json
+ctrip.txt
+mafengwo.json
+mafengwo.txt
+
 # Python
 __pycache__/
 *.pyc
