@@ -4,11 +4,16 @@ import json
 
 import pytest
 
-from crawler.adapters.base import find_subtree_by_id
+from crawler.adapters.base import (
+    detect_redirect_away,
+    find_subtree_by_id,
+    is_short_link,
+    short_link_code,
+)
 from crawler.adapters.xiaohongshu import (
+    _SHORT_CODE_PREFIX,
+    _SHORT_LINK_HOSTS,
     XiaohongshuAdapter,
-    _is_short_link,
-    _short_link_code,
     _static_note_id,
     detect_walls,
     extract_metrics_from_text,
@@ -41,12 +46,12 @@ def test_parse_article_id_rejects_invalid():
 def test_short_link_detected_and_resolved_from_final_url():
     """단축링크는 정적 파싱 불가 → 리다이렉트된 최종 URL 에서 해석하는 경로."""
     short = "https://xhslink.com/a/AbCd12"
-    assert _is_short_link(short) is True
+    assert is_short_link(short, _SHORT_LINK_HOSTS) is True
     assert _static_note_id(short) is None
     final = f"https://www.xiaohongshu.com/explore/{_NOTE_ID}?xsec_token=XY"
     assert _static_note_id(final) == _NOTE_ID
     # 최종 URL 에서도 못 얻으면(차단 리다이렉트) 단축코드가 식별자
-    assert _short_link_code(short) == "xhslink:a/AbCd12"
+    assert short_link_code(short, _SHORT_CODE_PREFIX) == "xhslink:a/AbCd12"
 
 
 # --- 차단(월) 감지 ----------------------------------------------------------
@@ -74,13 +79,17 @@ def test_detects_app_wall_from_body():
 def test_detects_login_wall_from_body_and_redirect_away():
     """실측: 접근 불가 노트가 /explore 전면 로그인 화면으로 리다이렉트된다."""
     body = "登录后推荐更懂你的笔记\n手机号登录\n+86\n获取验证码"
-    walls = detect_walls("https://www.xiaohongshu.com/explore", body, expected_id=_NOTE_ID)
+    final = "https://www.xiaohongshu.com/explore"
+    walls = detect_walls(final, body)
+    walls.update(detect_redirect_away(final, _NOTE_ID))
     assert walls == {"login_wall": True, "redirected_away": True}
 
 
 def test_no_wall_on_normal_page():
     final = f"https://www.xiaohongshu.com/explore/{_NOTE_ID}"
-    assert detect_walls(final, "点赞 38", expected_id=_NOTE_ID) == {}
+    walls = detect_walls(final, "点赞 38")
+    walls.update(detect_redirect_away(final, _NOTE_ID))
+    assert walls == {}
 
 
 # --- DOM 텍스트 추출 --------------------------------------------------------

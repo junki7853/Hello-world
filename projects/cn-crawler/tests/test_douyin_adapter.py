@@ -4,11 +4,12 @@ import json
 
 import pytest
 
+from crawler.adapters.base import detect_redirect_away, is_short_link, short_link_code
 from crawler.adapters.douyin import (
+    _SHORT_CODE_PREFIX,
+    _SHORT_LINK_HOSTS,
     DouyinAdapter,
     _format_create_time,
-    _is_short_link,
-    _short_link_code,
     _static_aweme_id,
     detect_walls,
     extract_followers,
@@ -42,12 +43,17 @@ def test_parse_article_id_rejects_invalid():
 def test_short_link_detected_and_resolved_from_final_url():
     """v.douyin.com 단축링크는 리다이렉트된 최종 URL 에서 aweme_id 를 해석한다."""
     short = "https://v.douyin.com/AbCdEfG/"
-    assert _is_short_link(short) is True
+    assert is_short_link(short, _SHORT_LINK_HOSTS) is True
     assert _static_aweme_id(short) is None
     final = f"https://www.douyin.com/video/{_AWEME_ID}?previous_page=app_code_link"
     assert _static_aweme_id(final) == _AWEME_ID
     # 최종 URL 에서도 못 얻으면(verify 리다이렉트) 단축코드가 식별자
-    assert _short_link_code(short) == "douyin-short:AbCdEfG"
+    assert short_link_code(short, _SHORT_CODE_PREFIX) == "douyin-short:AbCdEfG"
+
+
+def test_static_aweme_id_rejects_non_numeric_query():
+    """쿼리 id 는 숫자만 인정한다 (base 헬퍼 위에 얹은 도우인 고유 검증)."""
+    assert _static_aweme_id("https://www.douyin.com/discover?modal_id=abc") is None
 
 
 # --- verify 감지 ------------------------------------------------------------
@@ -67,14 +73,16 @@ def test_detects_verify_redirect_url():
 def test_no_wall_on_normal_page():
     """verify SDK 정적 JS 는 정상 페이지에도 로드된다 → 본문/URL 마커만 판정."""
     final = f"https://www.douyin.com/video/{_AWEME_ID}"
-    assert detect_walls(final, "全部评论", expected_id=_AWEME_ID) == {}
+    walls = detect_walls(final, "全部评论")
+    walls.update(detect_redirect_away(final, _AWEME_ID))
+    assert walls == {}
 
 
 def test_detects_redirect_to_other_video():
     """실측: /video/<id> 가 jingxuan?modal_id=<다른 id> 로 리다이렉트되면
     DOM 은 엉뚱한 영상의 지표다 → redirected_away 로 감지해 버린다."""
     final = "https://www.douyin.com/jingxuan?modal_id=7671211898179718400"
-    assert detect_walls(final, "", expected_id=_AWEME_ID) == {"redirected_away": True}
+    assert detect_redirect_away(final, _AWEME_ID) == {"redirected_away": True}
 
 
 # --- XHR 타깃 매칭 ----------------------------------------------------------

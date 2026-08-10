@@ -26,12 +26,11 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Response
 
-from crawler.adapters.base import Adapter, extract_labeled_counts
+from crawler.adapters.base import Adapter, extract_labeled_counts, navigate_and_settle
 from crawler.core.schema import Metrics
 
 logger = logging.getLogger(__name__)
 
-_NAV_TIMEOUT_MS = 60_000
 _SETTLE_WAIT_MS = 6_000
 
 # 노트 상세 /ugcdetail/3099928252, 샵 페이지 /shop/H8gTDqYy (영숫자 암호화 id)
@@ -106,8 +105,7 @@ class DianpingAdapter(Adapter):
 
         with self.session.page(url_for_cookies=url) as page:
             page.on("response", on_response)
-            page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
-            page.wait_for_timeout(_SETTLE_WAIT_MS)
+            navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             final_url = page.url
             page_title = page.title()
             body_text = self.page_body_text(page)

@@ -22,30 +22,33 @@ from __future__ import annotations
 import json
 import logging
 import re
-from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, Response
 
 from crawler.adapters.base import (
+    XHR_BODY_MAX_LEN,
     Adapter,
+    detect_redirect_away,
     extract_labeled_counts,
     find_counts,
     find_subtree_by_id,
+    is_short_link,
+    navigate_and_settle,
+    short_link_code,
+    static_id_from_url,
 )
 from crawler.core.schema import Metrics
 
 logger = logging.getLogger(__name__)
 
-_NAV_TIMEOUT_MS = 60_000
 _SETTLE_WAIT_MS = 8_000
-# 도우인/샤오홍슈 상세 JSON 은 20K 를 훌쩍 넘는다 → 잘리면 파싱 불가라 캡을 키운다
-_XHR_BODY_MAX_LEN = 400_000
 
 # 노트 id: 24자리 hex. /explore/<id>, /discovery/item/<id>
 _NOTE_ID_PATTERN = re.compile(r"/(?:explore|discovery/item|item)/([0-9a-f]{24})")
 _QUERY_ID_KEYS = ("noteId", "note_id")
 # 공유 단축링크 (xhslink.com/xxx) — 정적으로 id 를 알 수 없어 내비게이션 후 해석
-_SHORT_LINK_HOST = "xhslink.com"
+_SHORT_LINK_HOSTS = ("xhslink.com",)
+_SHORT_CODE_PREFIX = "xhslink:"
 
 # JSON 서브트리에서 타깃 노트를 찾을 id 키 (API snake_case + SSR camelCase)
 _ID_KEYS = ("note_id", "noteId", "id")
@@ -100,23 +103,29 @@ class XiaohongshuAdapter(Adapter):
 
     def collect(self, url: str) -> Metrics:
         # 단축링크는 리다이렉트 후 최종 URL 에서 id 를 해석한다
-        static_id = None if _is_short_link(url) else self.parse_article_id(url)
+        static_id = (
+            None if is_short_link(url, _SHORT_LINK_HOSTS) else self.parse_article_id(url)
+        )
         captured: dict[str, object] = {"json_bodies": []}
 
         def on_response(resp: Response) -> None:
-            self.capture_count_json(resp, captured, max_len=_XHR_BODY_MAX_LEN)
+            self.capture_count_json(resp, captured, max_len=XHR_BODY_MAX_LEN)
 
         with self.session.page(url_for_cookies=url, desktop=True) as page:
             page.on("response", on_response)
-            page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
-            page.wait_for_timeout(_SETTLE_WAIT_MS)
+            navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             final_url = page.url
             page_title = page.title()
             body_text = self.page_body_text(page)
             self._capture_initial_state(page, captured)
 
-        article_id = static_id or _static_note_id(final_url) or _short_link_code(url)
-        walls = detect_walls(final_url, body_text, expected_id=static_id)
+        article_id = (
+            static_id
+            or _static_note_id(final_url)
+            or short_link_code(url, _SHORT_CODE_PREFIX)
+        )
+        walls = detect_walls(final_url, body_text)
+        walls.update(detect_redirect_away(final_url, static_id))
         xhr = self._xhr_counts(captured, article_id)
         dom = extract_metrics_from_text(body_text) if not walls else {}
         return self._build_metrics(
@@ -139,7 +148,7 @@ class XiaohongshuAdapter(Adapter):
         if state and state != "null":
             bodies = captured.setdefault("json_bodies", [])
             assert isinstance(bodies, list)
-            bodies.append(state[:_XHR_BODY_MAX_LEN])
+            bodies.append(state[:XHR_BODY_MAX_LEN])
 
     def _xhr_counts(self, captured: dict[str, object], article_id: str) -> dict[str, int]:
         """수집한 JSON 들에서 타깃 노트 서브트리를 찾아 카운트를 병합한다.
@@ -208,38 +217,13 @@ class XiaohongshuAdapter(Adapter):
 
 def _static_note_id(url: str) -> str | None:
     """URL 경로/쿼리에서 노트 id 를 찾는다. 없으면 None."""
-    parsed = urlparse(url)
-    match = _NOTE_ID_PATTERN.search(parsed.path)
-    if match:
-        return match.group(1)
-    query = parse_qs(parsed.query)
-    for key in _QUERY_ID_KEYS:
-        values = query.get(key)
-        if values and values[0]:
-            return values[0]
-    return None
+    return static_id_from_url(url, _NOTE_ID_PATTERN, _QUERY_ID_KEYS)
 
 
-def _is_short_link(url: str) -> bool:
-    hostname = urlparse(url).hostname or ""
-    return hostname == _SHORT_LINK_HOST or hostname.endswith("." + _SHORT_LINK_HOST)
-
-
-def _short_link_code(url: str) -> str:
-    """단축링크가 차단 페이지로 튕겨 id 해석이 불가하면 단축코드를 식별자로 쓴다."""
-    path = urlparse(url).path.strip("/")
-    if not path:
-        raise ValueError(f"URL 에서 샤오홍슈 노트 id 를 찾을 수 없습니다: {url}")
-    return f"xhslink:{path}"
-
-
-def detect_walls(
-    final_url: str, body_text: str, expected_id: str | None = None
-) -> dict[str, bool]:
+def detect_walls(final_url: str, body_text: str) -> dict[str, bool]:
     """최종 URL·본문 텍스트로 보안월/캡차월/로그인월/앱월을 감지한다.
 
-    expected_id 가 있는데 최종 URL 에서 사라졌다면(노트 대신 홈/로그인 화면으로
-    리다이렉트) redirected_away 로 기록한다 — 실측된 차단 형태.
+    타깃 id 이탈(redirected_away)은 base.detect_redirect_away 로 별도 판정한다.
     """
     walls: dict[str, bool] = {}
     if any(marker in final_url for marker in _SECURITY_URL_MARKERS):
@@ -252,8 +236,6 @@ def detect_walls(
         walls["login_wall"] = True
     if _APP_WALL_TEXT in body_text:
         walls["app_wall"] = True
-    if expected_id and expected_id not in final_url:
-        walls["redirected_away"] = True
     return walls
 
 

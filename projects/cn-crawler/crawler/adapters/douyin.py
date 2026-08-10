@@ -25,29 +25,37 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, Response
 
-from crawler.adapters.base import Adapter, find_counts, find_subtree_by_id
+from crawler.adapters.base import (
+    XHR_BODY_MAX_LEN,
+    Adapter,
+    detect_redirect_away,
+    find_counts,
+    find_subtree_by_id,
+    is_short_link,
+    navigate_and_settle,
+    short_link_code,
+    static_id_from_url,
+)
 from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
 
-_NAV_TIMEOUT_MS = 60_000
 _SETTLE_WAIT_MS = 10_000
-# aweme detail JSON 은 100K 를 넘는다 → 잘리면 파싱 불가라 캡을 키운다
-_XHR_BODY_MAX_LEN = 400_000
 
 # aweme_id: 15~20자리 숫자. /video/<id>, /note/<id>(이미지 게시물)
 _AWEME_ID_PATTERN = re.compile(r"/(?:video|note)/(\d{15,20})")
 _QUERY_ID_KEYS = ("aweme_id", "modal_id", "vid")
 # 공유 단축링크 — 정적으로 id 를 알 수 없어 내비게이션 후 최종 URL 에서 해석
 _SHORT_LINK_HOSTS = ("v.douyin.com", "iesdouyin.com")
+_SHORT_CODE_PREFIX = "douyin-short:"
 
 # detail XHR 만 수집한다 (tab/feed·series 의 추천 영상 카운트 오염 차단 1차 방어)
 _DETAIL_XHR_MARKER = "/aweme/detail/"
-_ID_KEYS = ("aweme_id", "awemeId")
+# detail XHR 실측에서 관측된 id 키만 (camelCase 는 관측된 바 없어 두지 않는다)
+_ID_KEYS = ("aweme_id",)
 
 # verify 슬라이더/중간페이지 감지 (본문 텍스트·최종 URL)
 _VERIFY_TEXT_MARKERS = ("拖动滑块", "验证码中间页", "请完成下列验证")
@@ -92,25 +100,31 @@ class DouyinAdapter(Adapter):
         return aweme_id
 
     def collect(self, url: str) -> Metrics:
-        static_id = None if _is_short_link(url) else self.parse_article_id(url)
+        static_id = (
+            None if is_short_link(url, _SHORT_LINK_HOSTS) else self.parse_article_id(url)
+        )
         captured: dict[str, object] = {"json_bodies": []}
 
         def on_response(resp: Response) -> None:
             # 플랫폼 고유부: detail XHR 만 수집 (피드/시리즈 응답 오염 차단)
             if _DETAIL_XHR_MARKER in resp.url:
-                self.capture_count_json(resp, captured, max_len=_XHR_BODY_MAX_LEN)
+                self.capture_count_json(resp, captured, max_len=XHR_BODY_MAX_LEN)
 
         with self.session.page(url_for_cookies=url, desktop=True) as page:
             page.on("response", on_response)
-            page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
-            page.wait_for_timeout(_SETTLE_WAIT_MS)
+            navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             final_url = page.url
             page_title = page.title()
             body_text = self.page_body_text(page)
             dom = self._read_dom(page)
 
-        article_id = static_id or _static_aweme_id(final_url) or _short_link_code(url)
-        walls = detect_walls(final_url, body_text, expected_id=article_id)
+        article_id = (
+            static_id
+            or _static_aweme_id(final_url)
+            or short_link_code(url, _SHORT_CODE_PREFIX)
+        )
+        walls = detect_walls(final_url, body_text)
+        walls.update(detect_redirect_away(final_url, article_id))
         if walls:
             # redirected_away 포함: DOM 은 리다이렉트된 다른 영상의 지표일 수
             # 있으므로(진선 modal 리다이렉트 실측) 통째로 버린다
@@ -239,33 +253,9 @@ class DouyinAdapter(Adapter):
 
 
 def _static_aweme_id(url: str) -> str | None:
-    """URL 경로/쿼리에서 aweme_id 를 찾는다. 없으면 None."""
-    parsed = urlparse(url)
-    match = _AWEME_ID_PATTERN.search(parsed.path)
-    if match:
-        return match.group(1)
-    query = parse_qs(parsed.query)
-    for key in _QUERY_ID_KEYS:
-        values = query.get(key)
-        if values and values[0].isdigit():
-            return values[0]
-    return None
-
-
-def _is_short_link(url: str) -> bool:
-    hostname = urlparse(url).hostname or ""
-    return any(
-        hostname == host or hostname.endswith("." + host)
-        for host in _SHORT_LINK_HOSTS
-    )
-
-
-def _short_link_code(url: str) -> str:
-    """단축링크가 차단 페이지로 튕겨 id 해석이 불가하면 단축코드를 식별자로 쓴다."""
-    path = urlparse(url).path.strip("/")
-    if not path:
-        raise ValueError(f"URL 에서 도우인 aweme_id 를 찾을 수 없습니다: {url}")
-    return f"douyin-short:{path}"
+    """URL 경로/쿼리에서 aweme_id 를 찾는다. 없으면 None (숫자 id 만 인정)."""
+    aweme_id = static_id_from_url(url, _AWEME_ID_PATTERN, _QUERY_ID_KEYS)
+    return aweme_id if aweme_id and aweme_id.isdigit() else None
 
 
 def _format_create_time(create_time: object) -> str | None:
@@ -275,22 +265,17 @@ def _format_create_time(create_time: object) -> str | None:
     return datetime.fromtimestamp(create_time, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def detect_walls(
-    final_url: str, body_text: str, expected_id: str | None = None
-) -> dict[str, bool]:
-    """최종 URL·본문 텍스트로 verify 슬라이더/중간페이지·타깃 이탈을 감지한다.
+def detect_walls(final_url: str, body_text: str) -> dict[str, bool]:
+    """최종 URL·본문 텍스트로 verify 슬라이더/중간페이지를 감지한다.
 
-    expected_id 가 최종 URL 에서 사라졌다면 다른 영상으로 리다이렉트된 것이다
-    (실측: /video/<id> 가 jingxuan?modal_id=<다른 id> 로 이동) — 이때 DOM 값은
-    엉뚱한 영상의 지표이므로 호출부가 버려야 한다.
+    타깃 이탈(실측: /video/<id> 가 jingxuan?modal_id=<다른 id> 로 리다이렉트,
+    이때 DOM 은 엉뚱한 영상의 지표)은 base.detect_redirect_away 로 별도 판정한다.
     """
     walls: dict[str, bool] = {}
     if _VERIFY_URL_MARKER in final_url or any(
         marker in body_text for marker in _VERIFY_TEXT_MARKERS
     ):
         walls["verify_wall"] = True
-    if expected_id and expected_id not in final_url:
-        walls["redirected_away"] = True
     return walls
 
 

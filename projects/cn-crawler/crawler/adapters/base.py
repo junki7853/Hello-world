@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, Response
 
@@ -21,6 +22,11 @@ from crawler.core.browser import BrowserSession
 from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
+
+NAV_TIMEOUT_MS = 60_000
+#: 상세 XHR 본문 캡처 상한. 도우인/샤오홍슈 상세 JSON 은 100K 를 넘어
+#: capture_count_json 의 기본 캡(20K)이면 잘려 파싱 불가라 이 값을 쓴다.
+XHR_BODY_MAX_LEN = 400_000
 
 
 class Adapter(ABC):
@@ -122,6 +128,64 @@ def find_counts(obj: object, key_map: dict[str, str]) -> dict[str, int]:
         elif isinstance(current, list):
             queue.extend(current)
     return found
+
+
+def navigate_and_settle(
+    page: Page,
+    url: str,
+    settle_ms: int,
+    *,
+    wait_until: str = "domcontentloaded",
+    nav_timeout_ms: int = NAV_TIMEOUT_MS,
+) -> None:
+    """goto 후 고정 대기. 중국 플랫폼 상세는 지속 폴링 때문에 networkidle 에
+    도달하지 않는 경우가 흔해 domcontentloaded + 고정 대기가 기본이다."""
+    page.goto(url, wait_until=wait_until, timeout=nav_timeout_ms)
+    if settle_ms > 0:
+        page.wait_for_timeout(settle_ms)
+
+
+def static_id_from_url(
+    url: str, path_pattern: re.Pattern[str], query_keys: tuple[str, ...]
+) -> str | None:
+    """URL 경로 정규식 → 쿼리 키 순서로 게시물 id 를 찾는다. 없으면 None."""
+    parsed = urlparse(url)
+    match = path_pattern.search(parsed.path)
+    if match:
+        return match.group(1)
+    query = parse_qs(parsed.query)
+    for key in query_keys:
+        values = query.get(key)
+        if values and values[0]:
+            return values[0]
+    return None
+
+
+def is_short_link(url: str, hosts: tuple[str, ...]) -> bool:
+    """공유 단축링크 호스트인지 판정한다 (서브도메인 포함)."""
+    hostname = urlparse(url).hostname or ""
+    return any(
+        hostname == host or hostname.endswith("." + host) for host in hosts
+    )
+
+
+def short_link_code(url: str, prefix: str) -> str:
+    """단축링크가 차단 페이지로 튕겨 id 해석이 불가할 때 단축코드를 식별자로 쓴다."""
+    path = urlparse(url).path.strip("/")
+    if not path:
+        raise ValueError(f"단축링크에서 식별자를 얻을 수 없습니다: {url}")
+    return f"{prefix}{path}"
+
+
+def detect_redirect_away(final_url: str, expected_id: str | None) -> dict[str, bool]:
+    """타깃 id 가 최종 URL 에서 사라졌으면 redirected_away 로 기록한다.
+
+    노트/영상 대신 홈·로그인·다른 게시물로 리다이렉트된 차단 형태(실측) —
+    이때 DOM 값은 엉뚱한 게시물의 지표일 수 있으므로 호출부가 버려야 한다.
+    """
+    if expected_id and expected_id not in final_url:
+        return {"redirected_away": True}
+    return {}
 
 
 def find_subtree_by_id(
