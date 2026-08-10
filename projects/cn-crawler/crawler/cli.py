@@ -127,6 +127,11 @@ def collect_targets(
             adapter = adapter_cls(session)
             try:
                 metrics = adapter.collect(url)
+            except ValueError as exc:
+                # 어댑터가 모르는 URL 형식(파싱 불가) — 진짜 미지원만 여기로 온다.
+                # 지원 URL 의 차단/로그인월은 어댑터가 degrade 행으로 처리한다.
+                logger.warning("지원하지 않는 URL 형식 건너뜀: %s", exc)
+                continue
             except Exception:
                 logger.exception("수집 실패: %s", url)
                 continue
