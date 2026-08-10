@@ -1,6 +1,6 @@
 # cn-crawler — 중국 플랫폼 참여지표 크롤러
 
-중국 여행/콘텐츠 플랫폼(씨트립·마펑워·디엔핑·샤오홍슈·더우인 등) 게시물의 **참여지표(조회·좋아요·저장·댓글·공유)를 시계열로 수집**하는 크롤러다.
+중국 여행/콘텐츠 플랫폼 게시물의 **참여지표(조회·좋아요·저장·댓글·공유)를 시계열로 수집**하는 크롤러다. **5개 플랫폼 전부 커버: 씨트립(携程)·마펑워(马蜂窝)·디엔핑(大众点评)·샤오홍슈(小红书)·도우인(抖音).**
 
 핵심은 **안티봇 엔지니어링 데모**다. 플랫폼의 서명(sign) 알고리즘을 리버싱하지 않는다. 대신 **Playwright 헤드리스 브라우저로 실제 페이지를 렌더링**해서, 브라우저가 알아서 계산한 서명이 붙은 XHR 응답을 가로채거나 렌더된 DOM 텍스트를 읽는다. 플랫폼이 서명 로직을 바꿔도 우리 코드는 바꿀 필요가 없다는 것이 이 접근의 장점이다.
 
@@ -9,17 +9,19 @@
 ```
 crawler/
   core/
-    browser.py    Playwright 세션 (모바일 UA·stealth 기본, 쿠키/프록시 주입)
+    browser.py    Playwright 세션 (모바일/데스크톱 컨텍스트·stealth, 쿠키/프록시 주입)
     schema.py     정규화 스키마 Metrics(dataclass) + 중국어 카운트 파서(만/억)
     store.py      SQLite append-only 시계열 저장소 (+구버전 DB 자동 마이그레이션)
     export.py     CSV export (마케팅 트래킹 컬럼 순서, UTF-8-BOM)
     ratelimit.py  요청 간 정중한 무작위 지연
     log.py        로깅 설정
   adapters/
-    base.py       어댑터 계약: collect(url) -> Metrics
+    base.py       어댑터 계약 + 공통 헬퍼 (XHR 수집·카운트 BFS·id 매칭 서브트리)
     ctrip.py      씨트립 레퍼런스 어댑터 (첫 구현체)
     mafengwo.py   마펑워 어댑터 (캡차 감지 degrade)
     dianping.py   디엔핑 어댑터 (로그인월/verify 감지, PUA 난독화 플래그)
+    xiaohongshu.py 샤오홍슈 어댑터 (보안월/캡차월/앱월 감지, XHR+SSR 병합)
+    douyin.py     도우인 어댑터 (aweme_id 매칭 XHR + data-e2e DOM, verify 감지)
   cli.py          CSV/인라인 타깃 → 순차 수집 → 저장 / --export CSV 내보내기
 ```
 
@@ -59,6 +61,12 @@ python -m crawler.cli --csv targets.csv
 
 # 인라인 타깃으로 (반복 가능)
 python -m crawler.cli --url "ctrip=https://m.ctrip.com/webapp/you/community/detail?articleId=266207894"
+
+# 샤오홍슈 (노트 상세 — 공유링크의 xsec_token 쿼리는 붙은 그대로 넘길 것)
+python -m crawler.cli --url "xiaohongshu=https://www.xiaohongshu.com/explore/68a1b2c3000000001f00a1b2?xsec_token=..."
+
+# 도우인 (영상 상세 또는 v.douyin.com 공유 단축링크 — 단축링크는 자동 해석)
+python -m crawler.cli --url "douyin=https://www.douyin.com/video/7661958907732004122"
 
 # 옵션: --db data/crawler.db, --headed(창 띄우기), -v(디버그 로그)
 ```
@@ -130,19 +138,60 @@ python -m crawler.cli --export out.csv --db data/crawler.db
 
 어댑터 동작: 최종 URL 기반으로 `login_wall`/`verify_wall` 을 감지해 `None` + `raw` 진단으로 degrade. 정상 렌더 환경(중국 IP·유효 쿠키 `CRAWLER_COOKIES`)에서는 DOM 텍스트 정규식(点赞/收藏/浏览/评论) + XHR 카운트 키(likeCount/commentCount/followerCount 등, `followers` 매핑 포함)를 병합한다.
 
+## 샤오홍슈 어댑터 — 정찰 결과
+
+예시 URL: `https://www.xiaohongshu.com/explore/<noteId>` (24자리 hex, `xsec_token` 쿼리 포함 공유링크 권장), `/discovery/item/<noteId>`, `xhslink.com` 단축링크.
+
+정찰 스파이크에서 관찰한 사실 (2026-08, 헤드리스·비중국 IP·비로그인 기준):
+
+- **차단이 가장 강한 플랫폼.** 데스크톱 explore 는 즉시 **QR 보안검증**(`website-login/captcha`)으로, 유효한 `xsec_token` 없는 노트 상세는 **보안 404**(`/404/sec_*`, `xhs_sec_server`) 또는 **전면 로그인 화면**(手机号登录)으로 리다이렉트된다. 모바일 뷰는 "APP 에서만 열람" 앱 유도월. x-s/x-t 서명 리버싱·캡차 돌파는 하지 않는다.
+- 어댑터 동작: `security_wall`/`captcha_wall`/`login_wall`/`app_wall`/`redirected_away` 를 감지해 `None` + `raw` 진단으로 degrade. **이 환경의 실수집 결과는 `login_wall + redirected_away` 기록** — 실값 수집에는 중국 IP + 로그인 쿠키가 필요하다.
+- 정상 렌더 환경용 경로: **XHR**(`/api/sns/web/v1/feed` 류의 `interact_info`: `liked_count`/`collected_count`/`comment_count`/`share_count`, "1.2万" 문자열 포함) + **SSR 초기상태**(`window.__INITIAL_STATE__`, camelCase 키) + **DOM 텍스트 정규식** 병합. 피드 응답에 추천 노트 카운트가 섞이므로 **타깃 노트 id 서브트리로 좁힌 뒤에만** 카운트를 찾는다.
+
+## 도우인 어댑터 — 정찰 결과
+
+예시 URL: `https://www.douyin.com/video/<aweme_id>` (15~20자리 숫자), `/note/<id>`(이미지 게시물), `v.douyin.com` 공유 단축링크(리다이렉트 후 자동 해석).
+
+정찰 스파이크에서 관찰한 사실 (2026-08, 헤드리스·비중국 IP·비로그인, 데스크톱 뷰 기준):
+
+- **5개 중 유일하게 이 환경에서 실값이 수집된다.** 홈·영상 상세가 정상 렌더되고, XHR `aweme/v1/web/aweme/detail/` 의 `statistics` 에서 좋아요(`digg_count`)·저장(`collect_count`)·댓글·공유, `author.follower_count`(팬)·`create_time`·`desc`(제목)를 얻는다. **재생수(`play_count`)는 웹 API 가 0 으로 숨긴다** → 0 은 지표로 저장하지 않는다(`views=None`).
+- **추천 오염 방어가 필수.** 피드/시리즈 XHR 에 다른 영상들의 카운트가 섞이고, `/video/<id>` 가 `jingxuan?modal_id=<다른 영상>` 으로 리다이렉트되는 사례를 실측 → XHR 은 **타깃 `aweme_id` 매칭 서브트리**에서만, DOM 은 타깃 id 가 최종 URL 에 남아 있을 때만 쓴다(`redirected_away` 감지).
+- DOM 은 `data-e2e` 속성(`video-player-digg`/`-collect`/`-share`, `feed-comment-icon`, `user-info` 의 粉丝, `detail-video-publish-time`)으로 읽는다. XHR 정밀값이 DOM 반올림값("2.7万")보다 우선.
+- a_bogus/msToken 서명은 리버싱하지 않는다(브라우저가 계산). verify 슬라이더(拖动滑块)가 뜨면 감지 후 degrade. verify SDK 정적 JS 는 정상 페이지에도 로드되므로 마커로 쓰지 않는다.
+- 검증 수집 실측값(공개 게시물): likes=26,890 / collects=6,498 / comments=794 / shares=7,482 / followers=1,765,004 / upload_date=2026-07-13.
+
+## 운영 노트 — 정상 수집엔 중국 IP·쿠키가 필요하다
+
+이 크롤러는 차단을 **우회하지 않고 감지 후 기록**한다(`raw` 의 `*_wall`/`captcha_detected` 진단). 비중국 IP·비로그인 환경에서 기대할 수 있는 것:
+
+| 플랫폼 | 이 환경의 결과 | 실값 수집 조건 |
+|--------|----------------|----------------|
+| 씨트립 | comments 실값, 나머지 차단 | 중국 IP 또는 쿠키 |
+| 마펑워 | 캡차 차단 (`captcha_detected`) | 중국 IP + 쿠키 |
+| 디엔핑 | 로그인월/verify 차단 | 중국 IP + 로그인 쿠키 |
+| 샤오홍슈 | 로그인월/보안월 차단 | 중국 IP + 로그인 쿠키 + `xsec_token` 공유링크 |
+| 도우인 | **전 지표 실값** (재생수 제외) | — (현 환경으로 충분) |
+
+**프록시/쿠키 주입 지점** (코드 변경 불필요):
+
+- `CRAWLER_PROXY` — 중국 지역 프록시 (`crawler/core/browser.py` 가 Playwright launch 에 전달)
+- `CRAWLER_COOKIES` — 로그인 쿠키 문자열 (타깃 URL 의 등록도메인으로 자동 스코핑되어 XHR 에도 전송)
+
+둘 다 `.env` 로 관리하며, 주입 후 같은 CLI 명령을 재실행하면 된다. 어댑터의 DOM/XHR 병합 경로는 정상 렌더 환경을 전제로 이미 구현돼 있다.
+
 ## 테스트
 
 ```bash
-python -m pytest        # 브라우저 없이 되는 로직 (스키마·저장·export·CLI·어댑터 파싱) 88건
+python -m pytest        # 브라우저 없이 되는 로직 (스키마·저장·export·CLI·어댑터 파싱) 130건
 ```
 
 브라우저가 필요한 실수집(navigate/DOM)은 스모크 테스트에서 제외한다.
 
-## 다음 Phase 확장 지점 (Phase 3)
+## 다음 Phase 확장 지점
 
-- **샤오홍슈(小红书)·더우인(抖音) 어댑터**: `crawler/adapters/<platform>.py` 에 `Adapter` 를 구현하고 `crawler/cli.py` 의 `ADAPTER_REGISTRY` 에 한 줄 등록. 두 플랫폼 모두 로그인월·서명 파라미터가 강한 편이라 쿠키 주입(`CRAWLER_COOKIES`) 전제로 설계할 것.
+- **중국 IP/쿠키 실렌더 검증**: 프록시·쿠키 확보 시 씨트립 좋아요-저장 교차 검증, 마펑워/디엔핑/샤오홍슈 DOM 경로 실렌더 검증 (위 운영 노트의 주입 지점 사용).
 - **디엔핑 폰트 난독화 디코드**: 로그인 쿠키·중국 IP 로 실제 렌더가 확보되면, `font_obfuscation_detected` 가 참인 페이지에서 `@font-face` 폰트를 받아 글리프→숫자 맵을 만들거나 숫자 영역 스크린샷+OCR 을 붙인다 (진입점: `adapters/dianping.py` 의 `extract_metrics_from_text`).
-- **마펑워/씨트립 중국 IP 검증**: 프록시 확보 시 DOM 경로(정규식·셀렉터) 실렌더 검증.
+- **도우인 재생수**: 웹 API 는 `play_count` 를 숨기므로, 크리에이터 계정 쿠키로 크리에이터 센터 API 를 읽는 별도 경로가 필요하다.
 
 ## 회사 이관 체크리스트
 
