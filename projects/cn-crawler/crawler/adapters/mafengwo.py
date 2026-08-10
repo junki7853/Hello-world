@@ -1,10 +1,14 @@
-"""마펑워(马蜂窝) 게시물(游记/攻略) 상세 페이지 어댑터.
+"""마펑워(马蜂窝) 게시물(游记/攻略/웽) 상세 페이지 어댑터.
 
 정찰 결과 (2026-08, 헤드리스·비중국 IP·비로그인):
 - 홈/목록 페이지는 정상 렌더되지만, 게시물 상세(`/i/<id>.html`)는 데스크톱·모바일
   모두 텐센트 슬라이드 캡차(t.captcha.qq.com)로 차단된다. 캡차 자동 돌파는 하지 않는다.
 - 과거 공개 pagelet JSON 엔드포인트(headOperateApi 등)는 404 로 제거됐다.
 - 상세가 networkidle 에 도달하지 않아(지속 폴링) domcontentloaded + 고정 대기를 쓴다.
+- 모바일 웽 상세(m.mafengwo.cn/mweng/wengdetailssr/weng?id=)는 캡차 없이 렌더되지만
+  지표 숫자에 라벨이 없다(하단 액션바 아이콘 옆 맨숫자). 대신 각 버튼의
+  data-exp-display-params JSON 에 item_name(点赞/评论/收藏)이 들어 있어 그걸로
+  숫자의 의미를 판정한다. 삭제된 게시물은 "笔记不存在" 본문으로 렌더된다.
 
 따라서 세 갈래로 최선껏 수집하고, 캡차에 막히면 None + raw 진단으로 degrade 한다:
   1) XHR 가로채기 — JSON 응답에서 알려진 카운트 키(vote_num/reply_num/…)를 탐색.
@@ -20,10 +24,10 @@ import logging
 import re
 from urllib.parse import parse_qs, urlparse
 
-from playwright.sync_api import Response
+from playwright.sync_api import Page, Response
 
 from crawler.adapters.base import Adapter, extract_labeled_counts, navigate_and_settle
-from crawler.core.schema import Metrics
+from crawler.core.schema import Metrics, parse_count
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +35,10 @@ _SETTLE_WAIT_MS = 6_000
 
 # /i/24867879.html 또는 쿼리 iid=24867879
 _PATH_ID_PATTERN = re.compile(r"/i/(\d+)\.html")
+# 모바일 웽(짧은 글) 상세: m.mafengwo.cn/mweng/wengdetailssr/weng?id=<id>
+# (실사용 시트 URL 에서 관측). 광범위한 "id" 쿼리 폴백은 무관한 URL 을 잘못
+# 받아들일 수 있어 weng 경로에서만 인정한다.
+_WENG_PATH_MARKER = "weng"
 
 _CAPTCHA_MARKER = "captcha.qq.com"
 
@@ -51,6 +59,11 @@ _DOM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 _UPLOAD_DATE_PATTERN = re.compile(r"发表于\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})")
 
+# 웽 상세 하단 액션바 버튼 (정찰 실측). 숫자는 라벨이 없고, 버튼의
+# 트래킹 속성 data-exp-display-params 의 item_name 이 지표 종류를 알려준다.
+_WENG_ACT_BTN_SELECTOR = ".pos-weng-detail-act-btn"
+_WENG_ITEM_NAME_TO_FIELD = {"点赞": "likes", "评论": "comments", "收藏": "collects"}
+
 
 class MafengwoAdapter(Adapter):
     platform = "mafengwo"
@@ -68,14 +81,17 @@ class MafengwoAdapter(Adapter):
     }
 
     def parse_article_id(self, url: str) -> str:
-        """경로 /i/<id>.html 또는 쿼리 iid 에서 게시물 id 를 파싱한다."""
+        """경로 /i/<id>.html, 쿼리 iid, weng 경로의 쿼리 id 에서 게시물 id 를 파싱한다."""
         parsed = urlparse(url)
         match = _PATH_ID_PATTERN.search(parsed.path)
         if match:
             return match.group(1)
-        values = parse_qs(parsed.query).get("iid")
-        if values and values[0]:
-            return values[0]
+        query = parse_qs(parsed.query)
+        query_keys = ("iid", "id") if _WENG_PATH_MARKER in parsed.path else ("iid",)
+        for key in query_keys:
+            values = query.get(key)
+            if values and values[0]:
+                return values[0]
         raise ValueError(f"URL 에서 마펑워 게시물 id 를 찾을 수 없습니다: {url}")
 
     def collect(self, url: str) -> Metrics:
@@ -94,12 +110,44 @@ class MafengwoAdapter(Adapter):
             navigate_and_settle(page, url, _SETTLE_WAIT_MS)
             page_title = page.title()
             body_text = self.page_body_text(page)
+            weng_dom = self._read_weng_action_bar(page)
 
         xhr = self.parse_captured_counts(captured)
         dom = extract_metrics_from_text(body_text)
+        for field, value in weng_dom.items():  # 텍스트 패턴이 못 채운 지표만 보충
+            dom.setdefault(field, value)
         return self._build_metrics(
             article_id, url, page_title, dom, xhr, captured, body_text
         )
+
+    # --- 플랫폼 고유부 -----------------------------------------------------
+
+    @staticmethod
+    def _read_weng_action_bar(page: Page) -> dict[str, int]:
+        """웽 상세 하단 액션바에서 지표를 읽는다 (웽이 아닌 페이지면 빈 dict).
+
+        숫자에 라벨이 없어 버튼의 data-exp-display-params(item_name)로 종류를
+        판정한다. 속성이 없거나 JSON 이 깨진 버튼은 건너뛴다.
+        """
+        counts: dict[str, int] = {}
+        try:
+            buttons = page.query_selector_all(_WENG_ACT_BTN_SELECTOR)
+        except Exception as exc:
+            logger.debug("마펑워 웽 액션바 탐색 실패: %s", exc)
+            return counts
+        for button in buttons:
+            try:
+                params = button.get_attribute("data-exp-display-params") or ""
+                item_name = json.loads(params).get("item_name")
+                text = button.inner_text()
+            except Exception as exc:
+                logger.debug("마펑워 웽 버튼 읽기 실패: %s", exc)
+                continue
+            field = _WENG_ITEM_NAME_TO_FIELD.get(item_name)
+            value = parse_count(text)
+            if field and value is not None:
+                counts.setdefault(field, value)
+        return counts
 
     # --- 병합 -------------------------------------------------------------
 

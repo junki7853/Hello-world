@@ -17,6 +17,12 @@ from crawler.adapters.mafengwo import MafengwoAdapter, extract_metrics_from_text
         ("https://m.mafengwo.cn/i/12345.html", "12345"),
         ("https://www.mafengwo.cn/i/24867879.html?from=share", "24867879"),
         ("https://m.mafengwo.cn/nb/detail?iid=999", "999"),
+        # 실사용 시트에서 관측된 모바일 웽 상세 URL 형 (쿼리 id 는 weng 경로만 인정)
+        (
+            "https://m.mafengwo.cn/mweng/wengdetailssr/weng?id=1776024644987370",
+            "1776024644987370",
+        ),
+        ("https://m.mafengwo.cn/mweng/wengdetailssr/weng?id=42&from=share", "42"),
     ],
 )
 def test_parse_article_id(url, expected):
@@ -28,6 +34,13 @@ def test_parse_article_id_rejects_invalid():
     adapter = MafengwoAdapter.__new__(MafengwoAdapter)
     with pytest.raises(ValueError):
         adapter.parse_article_id("https://www.mafengwo.cn/gonglve/")
+
+
+def test_query_id_only_accepted_on_weng_path():
+    """weng 경로가 아닌 URL 의 광범위한 id 쿼리는 게시물 id 로 받지 않는다."""
+    adapter = MafengwoAdapter.__new__(MafengwoAdapter)
+    with pytest.raises(ValueError):
+        adapter.parse_article_id("https://www.mafengwo.cn/search?id=123")
 
 
 # --- DOM 텍스트 정규식 추출 -------------------------------------------------
