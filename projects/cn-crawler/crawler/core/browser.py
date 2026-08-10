@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
@@ -154,15 +154,15 @@ def build_proxy_config(environ: Mapping[str, str] | None = None) -> dict | None:
     if not server:
         return None
     parsed = urlparse(server)
-    embedded_user = parsed.username
-    embedded_pass = parsed.password
-    if parsed.hostname and (embedded_user or embedded_pass):
+    # URL 임베드 인증은 percent-encoding 될 수 있다(p%40ss → p@ss). urlparse 는
+    # 디코드하지 않으므로 여기서 풀어 Playwright 에 원문 그대로 전달한다.
+    embedded_user = unquote(parsed.username) if parsed.username else parsed.username
+    embedded_pass = unquote(parsed.password) if parsed.password else parsed.password
+    if parsed.hostname and (parsed.username or parsed.password):
         netloc = parsed.hostname
         if parsed.port:
             netloc = f"{netloc}:{parsed.port}"
-        server = urlunparse(
-            (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
-        )
+        server = f"{parsed.scheme}://{netloc}"
     username = env.get("CRAWLER_PROXY_USERNAME") or embedded_user
     password = env.get("CRAWLER_PROXY_PASSWORD") or embedded_pass
     config: dict = {"server": server}

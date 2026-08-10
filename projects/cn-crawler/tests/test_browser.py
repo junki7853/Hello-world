@@ -136,6 +136,16 @@ def test_proxy_separate_env_credentials():
     }
 
 
+def test_proxy_embedded_credentials_are_percent_decoded():
+    # p%40ss → p@ss, 사용자명의 %3A → : 처럼 특수문자 비번을 올바로 복원한다
+    env = {"CRAWLER_PROXY": "http://us%3Aer:p%40ss@proxy.example:8080"}
+    assert build_proxy_config(environ=env) == {
+        "server": "http://proxy.example:8080",
+        "username": "us:er",
+        "password": "p@ss",
+    }
+
+
 def test_proxy_separate_env_overrides_embedded():
     env = {
         "CRAWLER_PROXY": "http://embed_u:embed_p@proxy.example:8080",
