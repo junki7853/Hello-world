@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 
-from outreach.core.schema import Lead
+from outreach.core.schema import Lead, dump_json
 
 _FIELDS = (
     "id", "product", "category", "name", "contact_email", "channels",
@@ -17,8 +16,7 @@ _FIELDS = (
 def export_csv(leads: list[Lead], csv_path: str | Path) -> int:
     """리드 목록을 CSV 로 저장하고 행 수를 반환한다."""
     path = Path(csv_path)
-    if str(path.parent) != ".":
-        path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=_FIELDS)
         writer.writeheader()
@@ -29,7 +27,7 @@ def export_csv(leads: list[Lead], csv_path: str | Path) -> int:
                 "category": lead.category,
                 "name": lead.name,
                 "contact_email": lead.contact_email or "",
-                "channels": json.dumps(lead.channels, ensure_ascii=False, sort_keys=True),
+                "channels": dump_json(lead.channels),
                 "evidence_urls": " ".join(lead.evidence_urls),
                 "fit_score": lead.fit_score,
                 "fit_reason": lead.fit_reason,

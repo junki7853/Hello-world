@@ -86,6 +86,14 @@ class TestResearchCategory:
         client = FakeClient([_response("적합한 파트너를 찾지 못했습니다.")])
         assert ResearchEngine(client=client).research_category(profile, "업체") == []
 
+    def test_max_leads_초과분은_잘림(self, profile):
+        """모델이 max_leads 보다 많이 반환해도 실제 반환 목록은 잘린다."""
+        client = FakeClient([_response(_items_json("A", "B", "C", "D"))])
+        leads = ResearchEngine(client=client).research_category(
+            profile, "업체", max_leads=2
+        )
+        assert [lead.name for lead in leads] == ["A", "B"]
+
     def test_텍스트_블록만_취합(self, profile):
         """웹서치 결과 블록 등 text 아닌 블록이 섞여 있어도 파싱된다."""
         response = SimpleNamespace(stop_reason="end_turn", content=[
@@ -115,7 +123,8 @@ class TestPauseTurn:
     def test_상한_초과시_에러(self, profile):
         config = ResearchConfig(max_continuations=2)
         client = FakeClient([_response("...", stop_reason="pause_turn")] * 3)
-        with pytest.raises(ResearchError, match="pause_turn"):
+        # 실제 요청 횟수(max_continuations+1 = 3회)를 그대로 보고해야 한다
+        with pytest.raises(ResearchError, match="3회"):
             ResearchEngine(config=config, client=client).research_category(profile, "업체")
         assert len(client.calls) == 3
 
@@ -127,17 +136,14 @@ class TestRefusal:
             ResearchEngine(client=client).research_category(profile, "업체")
 
 
-class TestResearch:
-    def test_모든_카테고리_순회(self, profile):
+class TestMaxTokens:
+    def test_잘린_응답은_명시_에러(self, profile):
+        """max_tokens 로 잘린 JSON 을 조용히 0건 처리하면 안 된다."""
         client = FakeClient([
-            _response(_items_json("업체A")),
-            _response(_items_json("인플루언서B")),
+            _response('[{"name": "잘림', stop_reason="max_tokens"),
         ])
-        leads = ResearchEngine(client=client).research(profile)
-        assert [(lead.category, lead.name) for lead in leads] == [
-            ("업체", "업체A"), ("인플루언서", "인플루언서B"),
-        ]
-        assert len(client.calls) == 2
+        with pytest.raises(ResearchError, match="max_tokens"):
+            ResearchEngine(client=client).research_category(profile, "업체")
 
 
 class TestConfig:

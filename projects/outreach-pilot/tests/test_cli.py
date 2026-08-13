@@ -81,6 +81,48 @@ def test_export_product_필터(tmp_path, make_lead):
     assert [r["product"] for r in rows] == ["상품A"]
 
 
+def test_export_status_필터(tmp_path, make_lead):
+    db = tmp_path / "leads.db"
+    with Store(db) as store:
+        id1, _ = store.upsert(make_lead(name="a"))
+        store.upsert(make_lead(name="b"))
+        store.update_status(id1, "queued")
+    out_csv = tmp_path / "out.csv"
+    cli.main(["export", "--csv", str(out_csv), "--db", str(db), "--status", "queued"])
+    with open(out_csv, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [r["name"] for r in rows] == ["a"]
+
+
+def test_export_잘못된_status는_argparse_에러(tmp_path, capsys):
+    """오타 status 로 빈 CSV 가 조용히 만들어지면 안 된다 (choices 검증)."""
+    out_csv = tmp_path / "out.csv"
+    with pytest.raises(SystemExit):
+        cli.main(["export", "--csv", str(out_csv), "--status", "quued"])
+    assert not out_csv.exists()
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_export_DB_없으면_명시_에러(tmp_path, capsys):
+    """없는 DB 를 새로 만들어 빈 CSV 를 내보내면 안 된다."""
+    missing_db = tmp_path / "no" / "such.db"
+    out_csv = tmp_path / "out.csv"
+    rc = cli.main(["export", "--csv", str(out_csv), "--db", str(missing_db)])
+    assert rc == 1
+    assert not missing_db.exists()
+    assert not out_csv.exists()
+    assert "DB 파일이 없습니다" in capsys.readouterr().err
+
+
+def test_DEFAULT_DB는_프로젝트_루트_절대경로():
+    """CWD 가 달라도 같은 DB 를 가리켜야 한다."""
+    from pathlib import Path
+
+    default = Path(cli.DEFAULT_DB)
+    assert default.is_absolute()
+    assert default == Path(cli.__file__).resolve().parent.parent / "data" / "leads.db"
+
+
 def test_잘못된_명령은_에러(capsys):
     with pytest.raises(SystemExit):
         cli.main(["unknown"])

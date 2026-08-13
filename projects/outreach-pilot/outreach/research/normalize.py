@@ -9,49 +9,34 @@ from __future__ import annotations
 import json
 import re
 
-from outreach.core.schema import CATEGORIES, Lead
+from outreach.core.schema import CATEGORIES, Lead, dump_json
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+_DECODER = json.JSONDecoder()
 
 
 def extract_json_array(text: str) -> list[dict]:
     """응답 텍스트에서 JSON 배열을 추출한다.
 
-    코드펜스(```json ... ```) 안 → 텍스트 내 첫 '['~짝 ']' 순으로 시도.
+    코드펜스(```json ... ```) 안 → 본문 순으로, 각 '[' 위치에서
+    raw_decode 를 시도해 dict 를 담은 첫 배열을 반환한다. 인용 표기
+    "[1]" 처럼 앞선 배열이 파싱되더라도 dict 가 없으면 건너뛴다.
     배열을 찾지 못하면 빈 목록을 반환한다 (수집 0건으로 처리).
     """
     candidates = _FENCE_RE.findall(text)
     candidates.append(text)
     for candidate in candidates:
         start = candidate.find("[")
-        if start < 0:
-            continue
-        # 첫 '[' 부터 짝이 맞는 ']' 를 찾는다 (문자열 리터럴 내 괄호 무시)
-        depth, in_str, escape = 0, False, False
-        for i, ch in enumerate(candidate[start:], start):
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = in_str
-                continue
-            if ch == '"':
-                in_str = not in_str
-                continue
-            if in_str:
-                continue
-            if ch == "[":
-                depth += 1
-            elif ch == "]":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        data = json.loads(candidate[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
-                    if isinstance(data, list):
-                        return [d for d in data if isinstance(d, dict)]
-                    break
+        while start >= 0:
+            try:
+                data, _ = _DECODER.raw_decode(candidate, start)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, list):
+                items = [d for d in data if isinstance(d, dict)]
+                if items:
+                    return items
+            start = candidate.find("[", start + 1)
     return []
 
 
@@ -115,6 +100,6 @@ def to_leads(
             fit_reason=str(item.get("fit_reason") or "").strip(),
             status="new",
             created_at=created_at,
-            raw=json.dumps(item, ensure_ascii=False, sort_keys=True),
+            raw=dump_json(item),
         ))
     return leads

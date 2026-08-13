@@ -26,7 +26,8 @@ class ResearchConfig:
     model: str = field(
         default_factory=lambda: os.environ.get("OUTREACH_MODEL", _DEFAULT_MODEL)
     )
-    max_tokens: int = 8192
+    # 결과 JSON 이 잘리면 리드 전체가 날아가므로 넉넉하게 잡는다
+    max_tokens: int = 16384
     # 카테고리(요청) 1건당 웹서치 호출 상한 — 비용 제어의 1차 레버
     max_searches_per_category: int = 5
     # 서버측 도구 루프가 pause_turn 으로 끊겼을 때 이어달리는 횟수 상한
@@ -72,13 +73,6 @@ class ResearchEngine:
             client = anthropic.Anthropic()
         self._client = client
 
-    def research(self, profile: ProductProfile, max_leads_per_category: int = 10) -> list:
-        """프로필의 모든 카테고리를 조사해 Lead 목록을 반환한다."""
-        leads = []
-        for category in profile.categories:
-            leads.extend(self.research_category(profile, category, max_leads_per_category))
-        return leads
-
     def research_category(
         self, profile: ProductProfile, category: str, max_leads: int = 10
     ) -> list:
@@ -96,7 +90,8 @@ class ResearchEngine:
         )
         items = extract_json_array(text)
         created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        return to_leads(items, profile.product, category, created_at)
+        # 프롬프트의 "최대 N곳"은 권고일 뿐 — 초과 반환분은 여기서 자른다
+        return to_leads(items, profile.product, category, created_at)[:max_leads]
 
     def _run_turn(self, prompt: str):
         """웹서치 도구를 켠 요청 1턴을 실행한다 (pause_turn 이어달리기 포함)."""
@@ -117,6 +112,12 @@ class ResearchEngine:
             )
             if response.stop_reason == "refusal":
                 raise ResearchError("모델이 요청을 거부했습니다 (stop_reason=refusal)")
+            if response.stop_reason == "max_tokens":
+                # 잘린 JSON 을 파싱하면 조용히 0건이 되므로 명시적으로 실패시킨다
+                raise ResearchError(
+                    f"응답이 max_tokens({cfg.max_tokens})에서 잘렸습니다 — "
+                    "max_tokens 를 늘리거나 max_leads 를 줄이세요"
+                )
             if response.stop_reason != "pause_turn":
                 return response
             # 서버측 도구 루프 일시정지 — 대화를 그대로 다시 보내면 이어서 진행
@@ -125,5 +126,5 @@ class ResearchEngine:
             ]
 
         raise ResearchError(
-            f"pause_turn 이 {cfg.max_continuations}회 연속 발생해 중단했습니다"
+            f"pause_turn 이 {cfg.max_continuations + 1}회 연속 발생해 중단했습니다"
         )

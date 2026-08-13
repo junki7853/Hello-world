@@ -6,7 +6,14 @@ Phase 1 은 Lead 가 중심. Campaign / Thread 는 Phase 2~3(발송·응대)에�
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+
+
+def dump_json(value: object) -> str:
+    """channels/evidence_urls/raw 직렬화 공용 규약 (저장·내보내기 동일 표기)."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
 
 # 잠재 파트너 분류. 프로필/응답 정규화 시 이 목록 밖 값은 "기타"로 수렴한다.
 CATEGORIES = ("업체", "인플루언서", "물류", "마케팅", "기타")

@@ -90,6 +90,30 @@ class TestStatus:
             store.update_status(lead_id, "oops")
 
 
+class TestCorruptRow:
+    """DB 에 범위 밖 값이 섞여도 조회 전체가 죽으면 안 된다."""
+
+    @pytest.fixture
+    def store_with_bad_row(self, store, make_lead):
+        store.upsert(make_lead(name="정상"))
+        store._conn.execute(
+            "INSERT INTO leads (product, category, name, fit_score, created_at) "
+            "VALUES ('테스트상품', '업체', '불량', 999, '2026-08-14T00:00:00+00:00')"
+        )
+        return store
+
+    def test_list_leads는_불량_행_건너뜀(self, store_with_bad_row, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            leads = store_with_bad_row.list_leads()
+        assert [lead.name for lead in leads] == ["정상"]
+        assert "손상" in caplog.text
+
+    def test_get은_불량_행이면_None(self, store_with_bad_row):
+        assert store_with_bad_row.get("테스트상품", "불량") is None
+
+
 class TestFile:
     def test_재오픈시_데이터_유지(self, tmp_path, make_lead):
         db = tmp_path / "persist.db"

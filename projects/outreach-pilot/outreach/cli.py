@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_DB = "data/leads.db"
+from outreach.core.schema import STATUSES
+
+# CWD 상대경로면 실행 위치에 따라 다른(빈) DB 를 만들게 되므로
+# 프로젝트 루트(outreach/ 의 부모) 기준 절대경로로 고정한다
+DEFAULT_DB = str(Path(__file__).resolve().parent.parent / "data" / "leads.db")
 
 
 def _cmd_research(args: argparse.Namespace) -> int:
@@ -36,6 +41,7 @@ def _cmd_research(args: argparse.Namespace) -> int:
                     new_count += 1
                 else:
                     updated_count += 1
+            store.commit()  # 카테고리 단위 배치 커밋
         total = len(store.list_leads(product=profile.product))
     print(f"[research] 완료 — 신규 {new_count}건, 갱신 {updated_count}건 (해당 상품 누적 {total}건)")
     print(f"[research] DB: {args.db}")
@@ -46,6 +52,10 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from outreach.core.export import export_csv
     from outreach.core.store import Store
 
+    if not Path(args.db).exists():
+        # Store 는 없는 DB 를 만들어 버리므로, 내보내기는 부재를 명시 에러로
+        print(f"[export] DB 파일이 없습니다: {args.db}", file=sys.stderr)
+        return 1
     with Store(args.db) as store:
         leads = store.list_leads(product=args.product, status=args.status)
     count = export_csv(leads, args.csv)
@@ -72,7 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.add_argument("--csv", required=True, help="출력 CSV 경로")
     p_export.add_argument("--db", default=DEFAULT_DB, help=f"SQLite 경로 (기본 {DEFAULT_DB})")
     p_export.add_argument("--product", default=None, help="특정 상품만 (기본 전체)")
-    p_export.add_argument("--status", default=None, help="특정 상태만 (기본 전체)")
+    p_export.add_argument("--status", default=None, choices=STATUSES,
+                          help="특정 상태만 (기본 전체)")
     p_export.set_defaults(func=_cmd_export)
 
     return parser

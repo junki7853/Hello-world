@@ -43,6 +43,17 @@ class TestExtractJsonArray:
         result = extract_json_array(text)
         assert result[0]["fit_reason"] == '리뷰에 "best [2026]" 언급'
 
+    def test_인용표기_선행_텍스트(self):
+        """앞선 '[1]' 같은 인용 표기가 있어도 본 배열을 찾는다 (회귀: 첫 '['만 시도)."""
+        text = "조사 결과[1] 다음과 같습니다[2]:\n" + json.dumps([_item()], ensure_ascii=False)
+        result = extract_json_array(text)
+        assert len(result) == 1
+        assert result[0]["name"] == "파트너A"
+
+    def test_숫자_배열_선행해도_본_배열_추출(self):
+        text = "[1, 2, 3] 순위입니다.\n" + json.dumps([_item()], ensure_ascii=False)
+        assert extract_json_array(text)[0]["name"] == "파트너A"
+
     def test_배열_없으면_빈_목록(self):
         assert extract_json_array("적합한 파트너를 찾지 못했습니다.") == []
 
